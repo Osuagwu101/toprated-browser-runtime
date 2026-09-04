@@ -3,8 +3,10 @@ import { execFileSync } from 'node:child_process';
 export const RUNTIME_IDENTITY = Object.freeze({
   provider: 'self_hosted',
   engine: 'chromium',
-  controller: 'playwright_cdp',
+  controller: 'playwright_pipe',
+  viewer: 'restricted_websocket',
   toolSpecific: false,
+  rawCdpExposed: false,
 });
 
 export function chromiumInfo(executablePath = process.env.CHROMIUM_PATH || '/usr/bin/chromium') {
@@ -24,7 +26,7 @@ export function healthSnapshot() {
   return {
     status: 'ok',
     service: 'browser-worker',
-    phase: 2,
+    phase: 3,
     ...RUNTIME_IDENTITY,
     chromium: chromiumInfo(),
   };
