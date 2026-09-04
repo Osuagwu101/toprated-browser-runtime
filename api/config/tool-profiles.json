@@ -9,7 +9,7 @@
   },
   "generic-phase6-lifecycle": {
     "enabled": true,
-    "launch_url": "data:text/html,%3Ctitle%3EPhase%206%20Lifecycle%3C/title%3E%3Ch1%3ELifecycle%3C/h1%3E"
+    "launch_url": "data:text/html,%3C%21doctype%20html%3E%3Ctitle%3E{writer_id}%3C/title%3E%3Ch1%3E{writer_id}%3C/h1%3E"
   },
   "generic-phase7-smoke": {
     "enabled": true,
