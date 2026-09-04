@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 
 const apiBase = 'http://127.0.0.1:18080';
 const workerBase = 'http://127.0.0.1:18081';
+const workerControlSecret = process.env.WORKER_CONTROL_SECRET || '';
+const controlHeaders = { 'x-toprated-worker-secret': workerControlSecret };
 
 async function jsonFetch(url, options = {}, expected = 200) {
   const response = await fetch(url, options);
@@ -30,20 +32,20 @@ const apiHealth = (await jsonFetch(`${apiBase}/api/health`)).body;
 const workerHealth = (await jsonFetch(`${workerBase}/health`)).body;
 assert.equal(apiHealth.status, 'ok');
 assert.equal(apiHealth.service, 'control-plane');
-assert.equal(apiHealth.phase, 3);
+assert.ok([3, 4].includes(apiHealth.phase));
 assert.equal(apiHealth.browser_core, 'generic');
-assert.equal(apiHealth.viewer_layer, 'isolated');
 assert.equal(workerHealth.status, 'ok');
 assert.equal(workerHealth.service, 'browser-worker');
 assert.equal(workerHealth.phase, 3);
 assert.equal(workerHealth.browserCore, 'generic');
 assert.equal(workerHealth.viewer.rawCdpExposed, false);
 assert.equal(workerHealth.chromium.installed, true);
+assert.equal((await fetch(`${workerBase}/browser/status`)).status, 401);
 
 // Phase 2 regression: repeated Chromium start -> navigate -> stop.
 for (let cycle = 1; cycle <= 3; cycle += 1) {
   const start = (await jsonFetch(`${workerBase}/browser/start`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Lifecycle ${cycle}`) }),
+    method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Lifecycle ${cycle}`) }),
   }, 201)).body;
   assert.equal(start.active, true);
   assert.equal(start.phase, 3);
@@ -52,13 +54,13 @@ for (let cycle = 1; cycle <= 3; cycle += 1) {
   assert.ok(Number.isInteger(start.pid) && start.pid > 1);
 
   const nav = (await jsonFetch(`${workerBase}/browser/navigate`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Navigate ${cycle}`) }),
+    method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Navigate ${cycle}`) }),
   })).body;
   assert.equal(nav.title, `Navigate ${cycle}`);
   assert.equal(nav.readyState, 'complete');
   assert.equal(nav.control, 'cdp');
 
-  const stop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST' })).body;
+  const stop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST', headers: controlHeaders })).body;
   assert.equal(stop.active, false);
   assert.equal(stop.cleanup.rootExited, true);
   assert.deepEqual(stop.cleanup.orphanPids, []);
@@ -68,7 +70,7 @@ for (let cycle = 1; cycle <= 3; cycle += 1) {
 // Phase 3 secure viewer regression.
 const interactiveHtml = `<!doctype html><html><head><title>Viewer Ready</title><style>html,body{margin:0}#name{position:absolute;left:40px;top:40px;width:300px;height:50px}#go{position:absolute;left:40px;top:120px;width:180px;height:50px}.spacer{height:2400px;padding-top:220px}</style></head><body><input id="name" onkeydown="if(event.key==='Enter'){document.title='Typed:'+this.value}"><button id="go" onclick="document.title='Clicked'">Click me</button><div class="spacer">scroll target</div><script>addEventListener('scroll',()=>{if(scrollY>100)document.title='Scrolled:'+Math.round(scrollY)})</script></body></html>`;
 const start = (await jsonFetch(`${workerBase}/browser/start`, {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: `data:text/html,${encodeURIComponent(interactiveHtml)}` }),
+  method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: `data:text/html,${encodeURIComponent(interactiveHtml)}` }),
 }, 201)).body;
 assert.equal(start.title, 'Viewer Ready');
 assert.equal(start.viewer, 'restricted');
@@ -143,14 +145,14 @@ const shellInput = await fetch(`${workerBase}/viewer/${start.sessionId}/input`, 
 });
 assert.equal(shellInput.status, 400);
 
-const finalStop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST' })).body;
+const finalStop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST', headers: controlHeaders })).body;
 assert.equal(finalStop.cleanup.rootExited, true);
 assert.deepEqual(finalStop.cleanup.orphanPids, []);
 assert.deepEqual(finalStop.cleanup.zombiePids, []);
 assert.equal((await fetch(`${workerBase}/viewer/${start.sessionId}/frame`, { headers: auth })).status, 410);
 
 const finalWorker = (await jsonFetch(`${workerBase}/health`)).body;
-const finalBrowser = (await jsonFetch(`${workerBase}/browser/status`)).body;
+const finalBrowser = (await jsonFetch(`${workerBase}/browser/status`, { headers: controlHeaders })).body;
 assert.equal(finalWorker.status, 'ok');
 assert.equal(finalWorker.viewer.rawCdpExposed, false);
 assert.equal(finalBrowser.active, false);

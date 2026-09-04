@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController } from './browser-session.mjs';
 import { createViewerToken, DEFAULT_VIEWER_TTL_SECONDS, MAX_VIEWER_TTL_SECONDS, readBearerToken, resolveViewerSecret, verifyViewerToken } from './viewer-auth.mjs';
@@ -8,6 +8,8 @@ import { buildViewerHtml } from './viewer-page.mjs';
 const port = Number(process.env.PORT || 8081);
 const controller = new BrowserSessionController();
 const viewerSecret = resolveViewerSecret();
+const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
+if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
 const configuredViewerTtl = Number(process.env.VIEWER_TOKEN_TTL_SECONDS || DEFAULT_VIEWER_TTL_SECONDS);
 if (!Number.isInteger(configuredViewerTtl) || configuredViewerTtl < 1 || configuredViewerTtl > MAX_VIEWER_TTL_SECONDS) throw new Error(`VIEWER_TOKEN_TTL_SECONDS must be between 1 and ${MAX_VIEWER_TTL_SECONDS}.`);
 
@@ -18,11 +20,21 @@ async function readJson(request, maxBytes = 16 * 1024) { let body = ''; for awai
 function issueViewerGrant(sessionId) { const { token, payload } = createViewerToken({ sessionId, secret: viewerSecret, ttlSeconds: configuredViewerTtl }); return { url: `/viewer/${encodeURIComponent(sessionId)}#${encodeURIComponent(token)}`, expiresAt: new Date(payload.exp * 1000).toISOString(), tokenTransport: 'url-fragment-to-bearer', rawCdpExposed: false }; }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
 function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
+function authorizeWorkerControl(request) {
+  const supplied = String(request.headers['x-toprated-worker-secret'] || '');
+  const left = Buffer.from(supplied, 'utf8');
+  const right = Buffer.from(workerControlSecret, 'utf8');
+  if (left.length !== right.length || !timingSafeEqual(left, right)) {
+    throw Object.assign(new Error('Browser worker control authorization is required.'), { statusCode: 401 });
+  }
+}
 
 const server = http.createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url || '/', 'http://browser-worker.local');
     if (request.method === 'GET' && requestUrl.pathname === '/health') return writeJson(response, 200, buildHealthPayload());
+
+    if (requestUrl.pathname.startsWith('/browser/')) authorizeWorkerControl(request);
     if (request.method === 'GET' && requestUrl.pathname === '/browser/status') return writeJson(response, 200, controller.status);
     if (request.method === 'POST' && requestUrl.pathname === '/browser/start') { const body = await readJson(request); const status = await controller.start(body.url); return writeJson(response, 201, { ...status, viewerGrant: issueViewerGrant(status.sessionId) }); }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/navigate') { const body = await readJson(request); if (!body.url) throw Object.assign(new Error('url is required.'), { statusCode: 400 }); return writeJson(response, 200, await controller.navigate(body.url)); }
@@ -39,7 +51,7 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) { const statusCode = Number(error?.statusCode || 500); writeJson(response, statusCode, { status: 'error', message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }); }
 });
-server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: 3, control: 'cdp', viewer: 'restricted' })));
+server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: 4, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel' })));
 let shuttingDown = false;
 async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 8000); forceTimer.unref(); try { await controller.stop(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));

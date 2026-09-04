@@ -15,7 +15,7 @@ final class BrowserWorkerClient
 
     public function health(): array
     {
-        return $this->request('GET', '/health');
+        return $this->request('GET', '/health', null, false);
     }
 
     public function status(): array
@@ -33,10 +33,18 @@ final class BrowserWorkerClient
         return $this->request('POST', '/browser/stop', []);
     }
 
-    private function request(string $method, string $path, ?array $payload = null): array
+    private function request(string $method, string $path, ?array $payload = null, bool $authenticateControl = true): array
     {
+        $pending = Http::acceptJson()->timeout(15);
+        if ($authenticateControl) {
+            $secret = (string) config('browser.worker_control_secret', '');
+            if (strlen($secret) < 32) {
+                throw new RuntimeApiException('WORKER_AUTH_MISCONFIGURED', 503, 'Browser worker control authentication is not configured.');
+            }
+            $pending = $pending->withHeaders(['X-Toprated-Worker-Secret' => $secret]);
+        }
+
         try {
-            $pending = Http::acceptJson()->timeout(15);
             $response = $payload === null
                 ? $pending->send($method, $this->url($path))
                 : $pending->asJson()->send($method, $this->url($path), ['json' => $payload]);
@@ -45,7 +53,7 @@ final class BrowserWorkerClient
         }
 
         if (! $response->successful()) {
-            $code = $response->status() === 409 ? 'WORKER_BUSY' : 'WORKER_ERROR';
+            $code = $response->status() === 409 ? 'WORKER_BUSY' : ($response->status() === 401 ? 'WORKER_AUTH_FAILED' : 'WORKER_ERROR');
             $status = $response->status() === 409 ? 409 : 502;
             throw new RuntimeApiException($code, $status, 'The browser worker rejected the lifecycle operation.');
         }
