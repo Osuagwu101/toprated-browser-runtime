@@ -1,8 +1,8 @@
 # Phase 4 Audit — Laravel Session API & Ownership
 
-Status: **BRANCH IMPLEMENTATION GREEN / PROMOTION PENDING**.
+Status: **GREEN / COMPLETE / APPROVED**.
 
-Phase 4 is not marked complete by this document. The verified branch must pass this audit/documentation head, be promoted through a pull request to standalone `main`, and pass the Phase 4 workflow again on `main`. Only then may the completion wording be changed to GREEN / COMPLETE.
+Phase 4 is closed. The implementation, audit fixes, promotion and post-promotion regressions all passed on standalone `main`, and the production Browser Use baseline was reconfirmed unchanged before closure.
 
 ## Blueprint scope
 
@@ -14,19 +14,21 @@ The Master Blueprint v1.1 defines Phase 4 as:
 
 Multi-writer Chromium isolation is Phase 5. Renewable lease, idle/disconnect cleanup, watchdog and restart reconciliation are Phase 6. They are deliberately not claimed here.
 
-## Verified baseline
+## Verified baseline and closure
 
-Standalone repository: `Osuagwu101/toprated-browser-runtime`
+Standalone repository: `Osuagwu101/toprated-browser-runtime`.
 
-Phase 4 branch: `phase4-laravel-session-api`
+Phase 4 development branch: `phase4-laravel-session-api`.
 
-Baseline: standalone `main` commit `bfb6a1404481d88541b5af16423478d54d501d2f`, verified through Phase 3.
+Phase 3 baseline before Phase 4: standalone `main` commit `bfb6a1404481d88541b5af16423478d54d501d2f`.
 
-The production Top Rated SEO Tools application repository was not modified as part of Phase 4 development.
+Final corrected Phase 4 technical `main` baseline: `984378c78fea4dd5c3624ed43eca997e1aff845f`.
+
+Production Top Rated SEO Tools `main` remained unchanged at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084` during Phase 4 closure.
 
 ## Implemented control plane
 
-Laravel now owns the Phase 4 browser lifecycle through these routes:
+Laravel owns the Phase 4 browser lifecycle through:
 
 - `POST /api/sessions`
 - `GET /api/sessions/{id}`
@@ -37,7 +39,7 @@ Laravel now owns the Phase 4 browser lifecycle through these routes:
 - `GET /api/health`
 - `GET /api/capacity`
 
-The API persists browser-session records in SQLite on a named Docker volume. Records include opaque runtime session ID, writer ownership, tool slug, lifecycle status, worker session ID, heartbeat/activity timestamps, start/close timestamps and failure/termination metadata. Data-URL launch content is not persisted verbatim; the Phase 4 regression verifies the stored value is reduced to `data:text/html`.
+The API persists browser-session records in SQLite on a named Docker volume. Records include opaque runtime session ID, writer ownership, tool slug, lifecycle status, worker session ID, heartbeat/activity timestamps, start/close timestamps and failure/termination metadata. Data-URL launch content is not persisted verbatim; regression coverage verifies the stored value is reduced to `data:text/html`.
 
 ## Ownership and lifecycle behavior
 
@@ -56,15 +58,15 @@ External service-to-Laravel control requests use HMAC-SHA256 signing over:
 
 `METHOD + PATH + TIMESTAMP + NONCE + WRITER_ID + SHA256(BODY)`
 
-The middleware validates bounded timestamp skew, signature format, writer identity participation in the signature, and one-time nonce use. Valid nonces are persisted and replayed requests are rejected.
+The middleware validates bounded timestamp skew, signature format, writer identity participation in the signature and one-time nonce use. Valid nonces are persisted and replayed requests are rejected.
 
 Laravel-to-worker lifecycle control is separately protected by an internal `WORKER_CONTROL_SECRET`; direct unauthenticated calls to `/browser/*` are rejected. The worker remains host-published only on loopback in the current development/CI topology.
 
 ## Viewer authorization responsibility
 
-Laravel is now the operational issuer of viewer grants. The writer-bound grant contains session ID, writer ID, issue/expiry times and a random token ID, and uses the existing HMAC viewer signing secret. The worker verifies signed bearer grants but no longer exposes a production lifecycle route that mints them.
+Laravel is the operational issuer of viewer grants. The writer-bound grant contains session ID, writer ID, issue/expiry times and a random token ID, and uses the HMAC viewer signing secret. The worker verifies signed bearer grants but no longer exposes a production lifecycle route that mints them.
 
-The inherited Phase 3 viewer functionality remains regression-tested: JPEG frame capture, mouse, text/keyboard, scrolling, reconnect to the same Chromium process, restricted input contract, signed-token rejection behavior and viewer invalidation after browser close.
+The inherited viewer functionality remains regression-tested: JPEG frame capture, mouse, text/keyboard, scrolling, reconnect to the same Chromium process, restricted input contract, signed-token rejection behavior and viewer invalidation after browser close.
 
 ## Configuration readiness
 
@@ -77,43 +79,62 @@ Phase 4 health is not considered green unless:
 - viewer signing secret, token TTL and public viewer base URL are valid; and
 - `MAX_BROWSER_SESSIONS=1` while Phase 5 multi-session isolation is not yet implemented.
 
-Viewer-grant configuration is checked before Chromium launch so a bad viewer configuration cannot first be discovered after a browser has already been created.
+Viewer-grant configuration is checked before Chromium launch so bad viewer configuration cannot first be discovered after a browser has already been created.
 
-## CI history — failures retained
+## CI and audit history
 
 ### Run 1 — RED
 
 Run `33866819180`, job `101003454022`, head `62625472a95eed6a3e4d1aeaa7cad32632e3a611`.
 
-The inherited Phase 1-3 regression script hard-asserted that the Laravel API health payload was still Phase 3. The Phase 4 API correctly reported Phase 4, so the inherited regression step failed before the new Phase 4 end-to-end tests executed. The harness was corrected to preserve old browser/viewer behavior while accepting the new control-plane phase contract. This failure remains part of the audit history.
+The inherited Phase 1-3 regression hard-coded the Laravel API as Phase 3. The harness was corrected without removing browser/viewer regression coverage.
 
 ### Run 2 — RED
 
 Run `33866993636`, job `101003995956`, head `ec1788077af1c94617e8f201e9da4adb57240b84`.
 
-During the source audit, worker lifecycle routes were hardened with `WORKER_CONTROL_SECRET`, but the CI environment was not updated in the same commit. Docker Compose therefore could not build/resolve the required configuration. The workflow was corrected and a regression assertion now verifies that unauthenticated worker lifecycle access is rejected.
+`WORKER_CONTROL_SECRET` was made mandatory but the CI environment was not updated in the same change. CI configuration was corrected and worker-control bypass regression coverage was retained.
 
-### Run 3 — GREEN
+### Runs 3–5 — GREEN
 
-Run `33867076595`, job `101004249308`, head `dee3771615a7723e2bca1eefc1806664f680046b`.
+- `33867076595` — worker-control protection and corrected inherited harness.
+- `33867803222` — Laravel made sole viewer-grant issuer and worker ownership metadata corrected.
+- `33868000840` — launch-critical configuration readiness checks added.
 
-All Phase 4 workflow steps passed after worker lifecycle-control protection and the corrected regression harness.
+### Documented branch-head gate — GREEN
 
-### Run 4 — GREEN
+Run `33868316708`, head `3704b42ccac2da8ed6792b7f7af517422d838fb0`, passed before promotion.
 
-Run `33867803222`, job `101006527699`, head `2976bcd44edad8ee29c6f02aa0c84d9252c6df09`.
+### Initial promotion — GREEN Phase 4, RED inherited baseline
 
-All workflow steps passed after removing legacy worker-side viewer-grant issuance and making the worker health contract explicitly report Laravel as lifecycle owner and grant issuer.
+Pull request #2 promoted Phase 4 to standalone `main` at merge commit `a0e2b1c60635d04d459891e8b22e41ca64bf23c8`.
 
-### Run 5 — GREEN
+The full Phase 4 workflow passed on `main` in run `33869416309`. However, inherited workflow run `33869416366` failed at its Phase 3 static security gate. This was treated as a Phase 4 blocker rather than ignored.
 
-Run `33868000840`, job `101007143931`, head `01a71d104e8535a51a64e8dc6b8c220497bf6636`.
+Root cause: the old workflow still expected `url-fragment-to-bearer` issuance inside the Node worker even though Phase 4 had correctly moved grant issuance to Laravel, and it lacked the new launch-critical secrets needed by the current Docker topology.
 
-All workflow steps passed after configuration-readiness checks were added. The run passed static/unit checks, Docker build/boot, Phase 4 health, inherited Phase 1-3 regression, signed Phase 4 API lifecycle and ownership checks, sensitive-state persistence checks, Laravel restart persistence, independent Chromium cleanup, container status and complete teardown.
+### Compatibility-fix branch — GREEN
+
+Fix head `a58e5eea2ce8377429fc8f843f75e26e342a5f94` passed:
+
+- inherited Phase 1-3 baseline run `33869567556`; and
+- full Phase 4 run `33869567509`.
+
+### Final corrected `main` — GREEN
+
+Pull request #3 promoted the compatibility fix to `main` at `984378c78fea4dd5c3624ed43eca997e1aff845f`.
+
+Final authoritative `main` evidence:
+
+- inherited Phase 1-3 baseline run `33869763521` — GREEN;
+- full Phase 4 run `33869763531` — GREEN;
+- both runs completed build, boot, regression, Chromium cleanup and Docker teardown successfully.
+
+The production application repository was then rechecked and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
 
 ## Material issues
 
-See `docs/audits/ISSUE_REGISTER.md`. Phase 4 issues found during implementation/audit are retained there with their failure evidence and corrections.
+See `docs/audits/ISSUE_REGISTER.md`. All material Phase 4 issues discovered during implementation, promotion and post-promotion audit are retained there. No Critical or High Phase 4 issue remains open.
 
 ## Deliberately deferred blueprint work
 
@@ -125,15 +146,17 @@ These are not Phase 4 completion claims:
 - Phrasly saved-state injection and authentication verification — Phase 8/9;
 - broader security hardening/rate limiting/TLS deployment — later blueprint phases.
 
-The current worker remains deliberately single-session and Phase 4 refuses `MAX_BROWSER_SESSIONS` values other than 1 rather than pretending unsupported concurrency exists.
+The worker remains deliberately single-session and Phase 4 refuses `MAX_BROWSER_SESSIONS` values other than 1 rather than pretending unsupported concurrency exists.
 
-## Phase 4 branch exit gate
+## Phase 4 exit gate — CLOSED
 
-The technical Phase 4 implementation is GREEN on run `33868000840`. Final Phase 4 closure still requires:
+All Phase 4 closure conditions passed:
 
-1. this audit/documentation head to pass the Phase 4 workflow;
-2. promotion through a pull request into standalone `main`;
-3. the same Phase 4 workflow to pass on the resulting `main` head; and
-4. re-verification that the production application Browser Use baseline remains unchanged.
+1. documented Phase 4 branch head — GREEN;
+2. promotion through pull request #2 — COMPLETE;
+3. Phase 4 workflow on promoted `main` — GREEN;
+4. inherited Phase 1-3 regression after promotion defect repair — GREEN;
+5. production Browser Use baseline re-verification — UNCHANGED;
+6. material Phase 4 issue register — no open Critical/High blocker.
 
-Until those conditions pass, Phase 4 remains **PROMOTION PENDING**, and Phase 5 must not begin.
+**Phase 4 is therefore GREEN / COMPLETE / APPROVED. Phase 5 has not been started.**
