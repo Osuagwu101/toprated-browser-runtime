@@ -5,12 +5,14 @@ export function buildHealthPayload(env = process.env) {
   return {
     status: 'ok',
     service: 'browser-worker',
-    phase: 3,
+    phase: 4,
     browserCore: 'generic',
     control: 'cdp',
+    lifecycleOwner: 'laravel',
     viewer: {
       mode: 'restricted-frame-input',
       auth: 'signed-bearer',
+      grantIssuer: 'laravel',
       rawCdpExposed: false,
     },
     chromium: {

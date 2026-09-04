@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHmac, randomBytes } from 'node:crypto';
 
 const apiBase = 'http://127.0.0.1:18080';
 const workerBase = 'http://127.0.0.1:18081';
+const workerControlSecret = process.env.WORKER_CONTROL_SECRET || '';
+const viewerSecret = process.env.VIEWER_SIGNING_SECRET || '';
+const controlHeaders = { 'x-toprated-worker-secret': workerControlSecret };
 
 async function jsonFetch(url, options = {}, expected = 200) {
   const response = await fetch(url, options);
@@ -14,6 +18,24 @@ async function jsonFetch(url, options = {}, expected = 200) {
 
 function htmlData(title, body = '<h1>safe</h1>') {
   return `data:text/html,${encodeURIComponent(`<!doctype html><title>${title}</title>${body}`)}`;
+}
+
+function base64url(value) {
+  return Buffer.from(value).toString('base64url');
+}
+
+function testViewerToken(sessionId, ttlSeconds = 300) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    v: 1,
+    sid: sessionId,
+    iat: now,
+    exp: now + ttlSeconds,
+    jti: randomBytes(12).toString('base64url'),
+  };
+  const encoded = base64url(JSON.stringify(payload));
+  const signature = createHmac('sha256', viewerSecret).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
 }
 
 for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -30,55 +52,54 @@ const apiHealth = (await jsonFetch(`${apiBase}/api/health`)).body;
 const workerHealth = (await jsonFetch(`${workerBase}/health`)).body;
 assert.equal(apiHealth.status, 'ok');
 assert.equal(apiHealth.service, 'control-plane');
-assert.equal(apiHealth.phase, 3);
+assert.equal(apiHealth.phase, 4);
 assert.equal(apiHealth.browser_core, 'generic');
-assert.equal(apiHealth.viewer_layer, 'isolated');
 assert.equal(workerHealth.status, 'ok');
 assert.equal(workerHealth.service, 'browser-worker');
-assert.equal(workerHealth.phase, 3);
+assert.equal(workerHealth.phase, 4);
+assert.equal(workerHealth.lifecycleOwner, 'laravel');
 assert.equal(workerHealth.browserCore, 'generic');
+assert.equal(workerHealth.viewer.grantIssuer, 'laravel');
 assert.equal(workerHealth.viewer.rawCdpExposed, false);
 assert.equal(workerHealth.chromium.installed, true);
+assert.equal((await fetch(`${workerBase}/browser/status`)).status, 401);
 
-// Phase 2 regression: repeated Chromium start -> navigate -> stop.
+// Phase 2 regression: repeated Chromium start -> navigate -> stop remains healthy under Phase 4 worker-control authentication.
 for (let cycle = 1; cycle <= 3; cycle += 1) {
   const start = (await jsonFetch(`${workerBase}/browser/start`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Lifecycle ${cycle}`) }),
+    method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Lifecycle ${cycle}`) }),
   }, 201)).body;
   assert.equal(start.active, true);
   assert.equal(start.phase, 3);
   assert.equal(start.title, `Lifecycle ${cycle}`);
-  assert.equal(start.viewerGrant.rawCdpExposed, false);
+  assert.equal('viewerGrant' in start, false);
   assert.ok(Number.isInteger(start.pid) && start.pid > 1);
 
   const nav = (await jsonFetch(`${workerBase}/browser/navigate`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Navigate ${cycle}`) }),
+    method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Navigate ${cycle}`) }),
   })).body;
   assert.equal(nav.title, `Navigate ${cycle}`);
   assert.equal(nav.readyState, 'complete');
   assert.equal(nav.control, 'cdp');
 
-  const stop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST' })).body;
+  const stop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST', headers: controlHeaders })).body;
   assert.equal(stop.active, false);
   assert.equal(stop.cleanup.rootExited, true);
   assert.deepEqual(stop.cleanup.orphanPids, []);
   assert.deepEqual(stop.cleanup.zombiePids, []);
 }
 
-// Phase 3 secure viewer regression.
+// Phase 3 secure viewer regression. The test creates its own signed grant; production worker endpoints no longer mint grants.
 const interactiveHtml = `<!doctype html><html><head><title>Viewer Ready</title><style>html,body{margin:0}#name{position:absolute;left:40px;top:40px;width:300px;height:50px}#go{position:absolute;left:40px;top:120px;width:180px;height:50px}.spacer{height:2400px;padding-top:220px}</style></head><body><input id="name" onkeydown="if(event.key==='Enter'){document.title='Typed:'+this.value}"><button id="go" onclick="document.title='Clicked'">Click me</button><div class="spacer">scroll target</div><script>addEventListener('scroll',()=>{if(scrollY>100)document.title='Scrolled:'+Math.round(scrollY)})</script></body></html>`;
 const start = (await jsonFetch(`${workerBase}/browser/start`, {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: `data:text/html,${encodeURIComponent(interactiveHtml)}` }),
+  method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: `data:text/html,${encodeURIComponent(interactiveHtml)}` }),
 }, 201)).body;
 assert.equal(start.title, 'Viewer Ready');
 assert.equal(start.viewer, 'restricted');
-assert.equal(start.viewerGrant.rawCdpExposed, false);
-assert.equal(start.viewerGrant.tokenTransport, 'url-fragment-to-bearer');
-assert.ok(start.viewerGrant.url.startsWith(`/viewer/${start.sessionId}#`));
-assert.ok(!JSON.stringify(start).includes('webSocketDebuggerUrl'));
+assert.equal('viewerGrant' in start, false);
 
-const [viewerPath, encodedToken] = start.viewerGrant.url.split('#');
-const token = decodeURIComponent(encodedToken);
+const token = testViewerToken(start.sessionId);
+const viewerPath = `/viewer/${start.sessionId}`;
 const auth = { authorization: `Bearer ${token}` };
 const shell = await fetch(`${workerBase}${viewerPath}`);
 assert.equal(shell.status, 200);
@@ -143,16 +164,19 @@ const shellInput = await fetch(`${workerBase}/viewer/${start.sessionId}/input`, 
 });
 assert.equal(shellInput.status, 400);
 
-const finalStop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST' })).body;
+const finalStop = (await jsonFetch(`${workerBase}/browser/stop`, { method: 'POST', headers: controlHeaders })).body;
 assert.equal(finalStop.cleanup.rootExited, true);
 assert.deepEqual(finalStop.cleanup.orphanPids, []);
 assert.deepEqual(finalStop.cleanup.zombiePids, []);
 assert.equal((await fetch(`${workerBase}/viewer/${start.sessionId}/frame`, { headers: auth })).status, 410);
 
 const finalWorker = (await jsonFetch(`${workerBase}/health`)).body;
-const finalBrowser = (await jsonFetch(`${workerBase}/browser/status`)).body;
+const finalBrowser = (await jsonFetch(`${workerBase}/browser/status`, { headers: controlHeaders })).body;
 assert.equal(finalWorker.status, 'ok');
+assert.equal(finalWorker.phase, 4);
+assert.equal(finalWorker.lifecycleOwner, 'laravel');
+assert.equal(finalWorker.viewer.grantIssuer, 'laravel');
 assert.equal(finalWorker.viewer.rawCdpExposed, false);
 assert.equal(finalBrowser.active, false);
 
-console.log(JSON.stringify({ result: 'PASS', phase1: true, phase2Cycles: 3, phase3Viewer: true, sessionId: start.sessionId }));
+console.log(JSON.stringify({ result: 'PASS', phase1: true, phase2Cycles: 3, phase3Viewer: true, phase4OwnershipBoundary: true, sessionId: start.sessionId }));

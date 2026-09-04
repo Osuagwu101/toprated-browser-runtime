@@ -1,0 +1,169 @@
+name: Phase 4 Laravel Session API
+
+on:
+  push:
+    branches:
+      - phase4-laravel-session-api
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase4-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase4-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase4-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 1
+
+jobs:
+  phase4-session-ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Static and unit gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          find api -name '*.php' -print0 | xargs -0 -n1 php -l
+          python3 -m json.tool api/composer.json >/dev/null
+          grep -F "Route::post('/sessions'" api/routes/api.php
+          grep -F "Route::post('/sessions/{session}/heartbeat'" api/routes/api.php
+          grep -F "Route::post('/sessions/{session}/activity'" api/routes/api.php
+          grep -F "Route::delete('/sessions/{session}'" api/routes/api.php
+          grep -F "Route::get('/capacity'" api/routes/api.php
+          grep -F "service.auth" api/routes/api.php
+          grep -F "hash_hmac('sha256'" api/app/Services/ViewerGrantService.php
+          grep -F "hash_hmac('sha256'" api/app/Http/Middleware/VerifyServiceRequest.php
+          grep -F "authorizeWorkerControl(request)" browser-worker/src/server.mjs
+          grep -F "WORKER_CONTROL_SECRET" docker-compose.yml
+          grep -F "grantIssuer: 'laravel'" browser-worker/src/health.mjs
+          grep -F "assertConfigured" api/app/Http/Controllers/SessionController.php
+          if grep -F "issueViewerGrant" browser-worker/src/server.mjs; then
+            echo 'Browser worker must not issue production viewer grants in Phase 4.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
+            echo 'Phase 4 production runtime contains tool-specific Phrasly logic.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+
+      - name: Build Phase 4 containers
+        run: docker compose build
+
+      - name: Boot Phase 4 runtime
+        run: docker compose up -d
+
+      - name: Wait for Phase 4 health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase4-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase4-worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/phase4-health.json
+          cat /tmp/phase4-worker-health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/phase4-health.json'))
+          w=json.load(open('/tmp/phase4-worker-health.json'))
+          assert h['status']=='ok', h
+          assert h['phase']==4, h
+          assert h['session_owner']=='laravel', h
+          assert h['viewer_grant_issuer']=='laravel', h
+          assert h['service_auth']=='hmac-sha256-timestamp-nonce-v1', h
+          assert h['database']=='ok', h
+          assert h['browser_worker']=='ok', h
+          assert h['configuration']=='ok', h
+          assert w['phase']==4, w
+          assert w['lifecycleOwner']=='laravel', w
+          assert w['viewer']['grantIssuer']=='laravel', w
+          PY
+
+      - name: Validate viewer configuration fail-fast guard
+        run: |
+          docker compose exec -T api php -r '
+            require "vendor/autoload.php";
+            $app=require "bootstrap/app.php";
+            $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+            $service=$app->make(App\Services\ViewerGrantService::class);
+            $service->assertConfigured();
+            config(["browser.viewer_token_ttl_seconds"=>901]);
+            try { $service->assertConfigured(); fwrite(STDERR,"invalid TTL accepted\n"); exit(1); }
+            catch (App\Exceptions\RuntimeApiException $e) { if ($e->errorCode !== "VIEWER_TTL_INVALID") throw $e; }
+            config(["browser.viewer_token_ttl_seconds"=>300,"browser.viewer_public_base_url"=>"not-a-url"]);
+            try { $service->assertConfigured(); fwrite(STDERR,"invalid viewer URL accepted\n"); exit(1); }
+            catch (App\Exceptions\RuntimeApiException $e) { if ($e->errorCode !== "VIEWER_URL_INVALID") throw $e; }
+            echo "viewer_config_fail_fast=pass\n";
+          '
+
+      - name: Preserve Phase 1-3 browser and viewer regression
+        run: node browser-worker/test/standalone-migration.e2e.mjs
+
+      - name: Phase 4 signed API ownership and lifecycle regression
+        run: python3 tests/phase4-e2e.py
+
+      - name: Verify sensitive launch payload is not persisted
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $rows=$db->query("select launch_url from browser_sessions")->fetchAll(PDO::FETCH_COLUMN);
+            if (!$rows || $rows[0] !== "data:text/html") { fwrite(STDERR, json_encode($rows)); exit(1); }
+            echo "stored_launch_url=".$rows[0].PHP_EOL;
+          '
+
+      - name: Verify records survive Laravel restart
+        run: |
+          set -euo pipefail
+          docker compose restart api
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/dev/null; then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import hashlib,hmac,json,os,secrets,time
+          from urllib import request
+          sid=open('/tmp/phase4-session-id').read().strip(); path=f'/api/sessions/{sid}'; writer='writer-a'
+          ts=int(time.time()); nonce=secrets.token_urlsafe(18); body=b''
+          canonical='\n'.join(['GET',path,str(ts),nonce,writer,hashlib.sha256(body).hexdigest()]).encode()
+          sig=hmac.new(os.environ['RUNTIME_SERVICE_AUTH_SECRET'].encode(),canonical,hashlib.sha256).hexdigest()
+          req=request.Request('http://127.0.0.1:18080'+path,headers={'accept':'application/json','x-toprated-timestamp':str(ts),'x-toprated-nonce':nonce,'x-toprated-signature':sig,'x-toprated-writer-id':writer})
+          with request.urlopen(req,timeout=20) as response: data=json.load(response)
+          assert data['sessionId']==sid and data['status']=='closed', data
+          print('phase4_session_record_restart_persistence=pass')
+          PY
+
+      - name: Independent Chromium cleanup scan
+        run: |
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs'); const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          console.log('chromium_process_scan=clean');
+          NODE
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"

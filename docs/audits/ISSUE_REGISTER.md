@@ -16,21 +16,9 @@ Underlying cause:
 Repository continuity and evidence handling were inconsistent across the earlier phase work. The repository itself was not absent. Earlier audit language incorrectly treated repository creation as the unresolved blocker instead of checking the existing standalone repository and its actual validation state.
 
 Corrective action:
-1. Thoroughly verified the existing private standalone repository and retained its historical Phase 1-3 branches/runs rather than rewriting history.
-2. Created `verified-through-phase3` from standalone `main`.
-3. Migrated the repository-verified Phase 1-3 runtime to the standalone repository root.
-4. Added one combined standalone Phase 1-3 regression gate.
-5. Passed migration CI run `33856736920`, job `100971677159`.
-6. Updated the gate to validate both the migration branch and standalone `main`.
-7. Passed final migration-branch-head CI run `33857108185`, job `100972852957`.
-8. Promoted the validated tree through pull request #1 to standalone `main`, merge commit `5285c7a7a66e88215d5c7817c44b5e340f95f4c7`.
-9. Passed the complete combined gate again on standalone `main` in run `33857323898`, job `100973530886`.
-10. Rechecked the production application's `main` branch and confirmed it remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084` during the migration.
+The verified Phase 1-3 runtime was migrated into this standalone repository, promoted to `main`, and passed the combined Phase 1-3 gate on standalone `main` in run `33857323898`, job `100973530886`.
 
-Regression coverage:
-The standalone CI validates unit/syntax checks, Docker build/boot, API and worker health, generic tool-agnostic runtime behavior, localhost-only worker publication, no raw CDP publication, repeated Chromium lifecycle cleanup, signed restricted viewer authorization/security, JPEG frame capture, mouse/keyboard/scroll interaction, reconnect to the same browser session/PID, unsupported shell input rejection, viewer invalidation after stop, independent Chromium cleanup and full Docker teardown.
-
-Status: FIXED / CLOSED. The standalone repository is now the verified source of truth through Phase 3. Phase 4 may begin from standalone `main`.
+Status: FIXED / CLOSED.
 
 ## SB-003-001 — Earlier Phase 3 conversational state was not persisted in the verified source branch
 
@@ -43,3 +31,114 @@ Status: FIXED. Phase 3 was rebuilt from the verified Phase 2 head and fully reva
 Severity: Medium.
 
 Status: FIXED. The generic-runtime scan was narrowed to production source directories and the corrected Phase 3 validation passed.
+
+# Phase 4 issues
+
+## SB-004-001 — Worker lifecycle endpoints could bypass Laravel ownership
+
+Severity: High.
+
+Observed:
+The initial Phase 4 implementation added Laravel session ownership, but the worker's `/browser/start`, `/browser/status`, `/browser/navigate` and `/browser/stop` endpoints were still callable directly on the loopback-published worker port. A local caller could therefore create or manipulate a browser without a Laravel-owned session record.
+
+Expected:
+The Phase 4 exit gate says Laravel reliably owns browser lifecycle. Worker lifecycle control must not provide an unauthenticated bypass around Laravel.
+
+Underlying cause:
+Phase 3 deliberately exposed worker lifecycle endpoints to its isolated test harness. The first Phase 4 implementation layered Laravel ownership on top without immediately converting those inherited endpoints into an authenticated internal control surface.
+
+Corrective action:
+Added a separate `WORKER_CONTROL_SECRET`, required it on every `/browser/*` request, configured Laravel's `BrowserWorkerClient` to supply it, retained public worker health only, and added regression coverage proving unauthenticated worker lifecycle access returns 401.
+
+Regression evidence:
+Runs `33867076595`, `33867803222` and `33868000840` passed with worker-control protection enabled.
+
+Status: FIXED / CLOSED.
+
+## SB-004-002 — Inherited Phase 1-3 regression hard-coded the old API phase
+
+Severity: Medium.
+
+Observed:
+Phase 4 CI run `33866819180`, job `101003454022`, failed in the inherited Phase 1-3 regression step. The script asserted that Laravel API health must report `phase=3` and the Phase 3 `viewer_layer` field even though the control plane had correctly advanced to Phase 4.
+
+Expected:
+Regression coverage must preserve Phase 1-3 browser/viewer behavior without rejecting the deliberate Phase 4 control-plane contract.
+
+Underlying cause:
+The migration regression mixed behavioral invariants with a historical phase-number assertion.
+
+Corrective action:
+Updated the regression to validate the Phase 4 Laravel health contract while retaining the prior Chromium lifecycle, viewer security, input, reconnect and cleanup checks.
+
+Regression evidence:
+Subsequent Phase 4 runs passed the inherited regression, including `33868000840`.
+
+Status: FIXED / CLOSED.
+
+## SB-004-003 — Worker control secret was not wired into CI in the same change
+
+Severity: Medium.
+
+Observed:
+Phase 4 CI run `33866993636`, job `101003995956`, failed during container build/configuration after worker lifecycle authentication was introduced.
+
+Expected:
+The Phase 4 runtime and its CI environment must provide every required secret through environment configuration.
+
+Underlying cause:
+`WORKER_CONTROL_SECRET` was made mandatory in runtime/Docker configuration, but the workflow environment was not updated in that same commit.
+
+Corrective action:
+Added a CI-only worker control secret to the workflow and extended static/end-to-end checks around the control boundary.
+
+Regression evidence:
+Runs `33867076595`, `33867803222` and `33868000840` passed afterward.
+
+Status: FIXED / CLOSED.
+
+## SB-004-004 — Worker still presented stale Phase 3 ownership metadata and minted legacy viewer grants
+
+Severity: Medium.
+
+Observed:
+After Laravel session ownership was functional, worker health still reported Phase 3 and `/browser/start` still returned a worker-generated viewer grant inherited from Phase 3.
+
+Expected:
+Phase 4 architecture assigns lifecycle/session ownership and viewer-grant issuance to Laravel. The worker should remain the Chromium/control/viewer execution layer and verify grants rather than act as an alternative grant issuer.
+
+Underlying cause:
+Phase 3 responsibilities were preserved during the first Phase 4 implementation and had not yet been narrowed after the Laravel control plane became authoritative.
+
+Corrective action:
+Worker health now reports Phase 4, Laravel lifecycle ownership and Laravel viewer-grant issuance. The worker lifecycle start response no longer mints a viewer grant. Phase 3 viewer regression creates a test-only signed token, while the Phase 4 E2E verifies that a real Laravel-issued writer-bound token is accepted by the worker.
+
+Regression evidence:
+Run `33867803222` passed all workflow steps after the correction, and run `33868000840` remained green.
+
+Status: FIXED / CLOSED.
+
+## SB-004-005 — Control-plane health could be falsely green for invalid launch-critical configuration
+
+Severity: High.
+
+Observed:
+Laravel health originally verified database and worker availability but did not validate the service signing secret, worker control secret, viewer-grant configuration or Phase 4 single-session capacity rule. In particular, an invalid viewer TTL could be detected only while issuing a grant after Chromium had already been started.
+
+Expected:
+A healthy Phase 4 control plane must be capable of authenticating control requests and issuing a usable viewer grant before it creates a browser.
+
+Underlying cause:
+Configuration validation initially lived only at the point where individual features consumed each setting.
+
+Corrective action:
+Added explicit viewer-grant configuration validation (signing-secret length, TTL and public URL), checks it before session creation, and made health require valid service-auth, worker-control, viewer and Phase 4 capacity configuration in addition to database/worker health.
+
+Regression evidence:
+Run `33868000840`, job `101007143931`, passed all Phase 4 workflow steps with the readiness checks enabled.
+
+Status: FIXED / CLOSED.
+
+## Phase 4 closure rule
+
+Phase 4 is not closed merely because the implementation branch is green. The documented branch head must pass again, the branch must be promoted to standalone `main`, the Phase 4 workflow must pass on `main`, and the production Browser Use baseline must be rechecked. Any new red result is added here and fixed or left blocking.
