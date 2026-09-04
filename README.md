@@ -2,24 +2,27 @@
 
 Standalone, Docker-portable self-hosted browser runtime for Top Rated SEO Tools.
 
-## Verified baseline
+## Verified source of truth
 
-This repository is the intended standalone home of the self-hosted browser provider. The `verified-through-phase3` migration branch is being rebuilt from the repository-verified implementation in `Osuagwu101/topratedseotools-0bc24c5f` branch `self-hosted-browser-phase3`, whose final branch-head CI passed on source commit `1e20dfdb529117f237ef021a53f13190f88def16`.
+This private repository is now the verified standalone home of the self-hosted browser provider through **Phase 3**.
 
-The migrated runtime currently represents the end of **Phase 3**:
+Standalone `main` was promoted through pull request #1 from the fully validated `verified-through-phase3` migration branch. The promoted runtime passed the combined Phase 1-3 workflow on `main` in GitHub Actions run `33857323898`, job `100973530886`.
 
-- Phase 1 — isolated Laravel + Node + Chromium + Docker runtime foundation.
-- Phase 2 — deterministic Chromium start/control/stop lifecycle with cleanup checks.
-- Phase 3 — restricted signed-token viewer with mouse, keyboard, scroll and reconnect support, without writer-facing raw CDP/DevTools exposure.
+Verified status:
 
-**Phase 4 has not started.** The existing Browser Use production path remains untouched.
+- Phase 1 — isolated Laravel + Node + Chromium + Docker runtime foundation: GREEN.
+- Phase 2 — repeated Chromium start/control/stop lifecycle with cleanup checks: GREEN.
+- Phase 3 — restricted signed-token viewer with mouse, keyboard, scroll and reconnect support, without writer-facing raw CDP/DevTools exposure: GREEN.
+- Phase 4 — NOT STARTED.
+
+The existing Browser Use production path remains untouched.
 
 ## Architecture
 
 - `api/` — Laravel control-plane foundation. Phase 4 session orchestration is not implemented yet.
 - `browser-worker/` — Node.js Chromium worker, internal loopback-only CDP control, secure viewer frame capture and restricted input handling.
 - `docker-compose.yml` — portable Linux + Docker topology with localhost-only host publication for the current development/CI environment.
-- `docs/audits/` — phase and migration audit evidence.
+- `docs/audits/` — migration, issue and phase-gate evidence.
 
 The runtime core is intentionally generic and is not hardcoded to Phrasly or another tool.
 
@@ -54,4 +57,4 @@ Final production capacity must run on predictable fixed-price Linux VPS infrastr
 
 ## Production safety
 
-This standalone repository is still pre-production. Nothing in this migration switches the live application from Browser Use. Provider integration happens only in the later Blueprint integration phase after the standalone runtime passes its own gates.
+This standalone repository is still pre-production. Nothing through Phase 3 switches the live application from Browser Use. Provider integration happens only in the later Blueprint integration phase after the standalone runtime passes its subsequent gates.
