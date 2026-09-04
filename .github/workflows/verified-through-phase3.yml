@@ -1,0 +1,97 @@
+name: Verified Through Phase 3
+
+on:
+  push:
+    branches:
+      - verified-through-phase3
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VIEWER_SIGNING_SECRET: standalone-ci-only-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+
+jobs:
+  verified-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Phase 1 - unit and syntax gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          find api -name '*.php' -print0 | xargs -0 -n1 php -l
+          python3 -m json.tool api/composer.json >/dev/null
+          python3 -m json.tool browser-worker/package.json >/dev/null
+
+      - name: Phase 3 - static security gates
+        run: |
+          set -euo pipefail
+          grep -F -- "--remote-debugging-address=127.0.0.1" browser-worker/src/browser-session.mjs
+          grep -F -- "rawCdpExposed: false" browser-worker/src/health.mjs
+          grep -F -- "url-fragment-to-bearer" browser-worker/src/server.mjs
+          grep -F -- "frame-ancestors 'none'" browser-worker/src/server.mjs
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -i 'phrasly' browser-worker/src api; then
+            echo 'Production runtime contains tool-specific Phrasly logic.' >&2
+            exit 1
+          fi
+
+      - name: Build standalone containers
+        run: docker compose build
+
+      - name: Boot standalone runtime
+        run: docker compose up -d
+
+      - name: Verify localhost-only publication
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/dev/null && curl --fail --silent http://127.0.0.1:18081/health >/dev/null; then break; fi
+            sleep 2
+          done
+          PUBLISHED="$(docker compose port browser-worker 8081)"
+          echo "worker_publication=${PUBLISHED}"
+          case "$PUBLISHED" in 127.0.0.1:*) ;; *) echo 'browser worker is not localhost-only' >&2; exit 1 ;; esac
+          if docker compose port browser-worker 9222 >/tmp/cdp-published.txt 2>/dev/null && test -s /tmp/cdp-published.txt; then
+            echo "raw CDP port unexpectedly published: $(cat /tmp/cdp-published.txt)" >&2
+            exit 1
+          fi
+
+      - name: Phase 1-3 end-to-end regression
+        run: node browser-worker/test/standalone-migration.e2e.mjs
+
+      - name: Independent Chromium process cleanup check
+        run: |
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try {
+              if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry));
+            } catch {}
+          }
+          if (chromium.length) {
+            console.error(`orphan chromium processes: ${chromium.join(',')}`);
+            process.exit(1);
+          }
+          console.log('chromium_process_scan=clean');
+          NODE
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
