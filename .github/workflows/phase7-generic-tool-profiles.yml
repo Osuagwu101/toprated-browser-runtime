@@ -73,8 +73,8 @@ jobs:
             delay=$((delay * 2))
           done
 
-      - name: Boot runtime
-        run: docker compose up -d
+      - name: Boot runtime without autonomous reaper for inherited Phase 4/5 regressions
+        run: docker compose up -d api browser-worker
 
       - name: Wait for health
         run: |
@@ -121,6 +121,23 @@ jobs:
 
       - name: Phase 7 configured generic tool E2E
         run: python3 tests/phase7-e2e.py
+
+      - name: Start autonomous Phase 6 lifecycle reaper
+        run: |
+          set -euo pipefail
+          docker compose up -d lifecycle-reaper
+          for i in $(seq 1 20); do
+            if test -n "$(docker compose ps -q lifecycle-reaper)"; then
+              docker compose logs --no-color lifecycle-reaper > /tmp/phase7-reaper.log || true
+              if grep -F '"phase":6' /tmp/phase7-reaper.log; then
+                cat /tmp/phase7-reaper.log
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color lifecycle-reaper || true
+          exit 1
 
       - name: Preserve Phase 6 lifecycle and restart regression
         run: python3 tests/phase6-e2e.py
