@@ -18,19 +18,24 @@ final class BrowserWorkerClient
         return $this->request('GET', '/health', null, false);
     }
 
-    public function status(): array
+    public function sessions(): array
     {
-        return $this->request('GET', '/browser/status');
+        return $this->request('GET', '/browser/sessions');
+    }
+
+    public function status(string $workerSessionId): array
+    {
+        return $this->request('GET', '/browser/sessions/'.rawurlencode($workerSessionId));
     }
 
     public function start(?string $launchUrl): array
     {
-        return $this->request('POST', '/browser/start', $launchUrl === null ? [] : ['url' => $launchUrl]);
+        return $this->request('POST', '/browser/sessions', $launchUrl === null ? [] : ['url' => $launchUrl]);
     }
 
-    public function stop(): array
+    public function stop(string $workerSessionId): array
     {
-        return $this->request('POST', '/browser/stop', []);
+        return $this->request('DELETE', '/browser/sessions/'.rawurlencode($workerSessionId));
     }
 
     private function request(string $method, string $path, ?array $payload = null, bool $authenticateControl = true): array
@@ -53,8 +58,14 @@ final class BrowserWorkerClient
         }
 
         if (! $response->successful()) {
-            $code = $response->status() === 409 ? 'WORKER_BUSY' : ($response->status() === 401 ? 'WORKER_AUTH_FAILED' : 'WORKER_ERROR');
-            $status = $response->status() === 409 ? 409 : 502;
+            [$code, $status] = match ($response->status()) {
+                401 => ['WORKER_AUTH_FAILED', 502],
+                404 => ['WORKER_SESSION_MISSING', 404],
+                410 => ['WORKER_SESSION_GONE', 410],
+                429 => ['WORKER_CAPACITY_FULL', 429],
+                409 => ['WORKER_BUSY', 409],
+                default => ['WORKER_ERROR', 502],
+            };
             throw new RuntimeApiException($code, $status, 'The browser worker rejected the lifecycle operation.');
         }
 
