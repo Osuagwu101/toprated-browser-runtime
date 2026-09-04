@@ -1,0 +1,126 @@
+name: Self-Hosted Browser Phase 2 CI
+
+on:
+  push:
+    branches: [phase2-hardening]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  phase2-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate worker unit tests
+        working-directory: worker
+        run: node --test
+
+      - name: Validate PHP syntax
+        run: find api -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Enforce generic runtime core
+        run: |
+          if grep -RniE 'phrasly|sneakwrite|stealthwriter' worker/src api/routes; then
+            echo 'Tool-specific product name found in generic runtime core.'
+            exit 1
+          fi
+
+      - name: Build isolated runtime containers
+        run: docker compose build
+
+      - name: Boot isolated runtime
+        run: docker compose up -d
+
+      - name: Wait for Phase 2 health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/health >/tmp/api-health.json \
+              && curl -fsS http://127.0.0.1:18081/health >/tmp/worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          jq -e '.status == "ok" and .phase == 2 and .tool_specific == false' /tmp/api-health.json
+          jq -e '.status == "ok" and .phase == 2 and .provider == "self_hosted" and .toolSpecific == false and .chromium.available == true' /tmp/worker-health.json
+
+      - name: Repeated Chromium lifecycle cycles
+        run: |
+          set -euo pipefail
+          START='data:text/html,%3Ctitle%3EPhase%202%20Start%3C/title%3E%3Ch1%3EStart%3C/h1%3E'
+          NAV='data:text/html,%3Ctitle%3EPhase%202%20Navigate%3C/title%3E%3Ch1%3ENavigate%3C/h1%3E'
+          for cycle in $(seq 1 5); do
+            curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${START}\"}" http://127.0.0.1:18081/browser/start > /tmp/start.json
+            jq -e '.active == true and .phase == 2 and .title == "Phase 2 Start" and (.chromiumPids|length) > 0' /tmp/start.json
+            curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${NAV}\"}" http://127.0.0.1:18081/browser/navigate > /tmp/nav.json
+            jq -e '.active == true and .title == "Phase 2 Navigate" and .readyState == "complete"' /tmp/nav.json
+            curl -fsS -X POST http://127.0.0.1:18081/browser/stop > /tmp/stop.json
+            jq -e '.active == false and .cleanup.clean == true and (.cleanup.chromiumPids|length) == 0' /tmp/stop.json
+          done
+
+      - name: Failure path - invalid navigation fails closed
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/invalid.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{"url":"file:///etc/passwd"}' http://127.0.0.1:18081/browser/start)
+          test "$code" = "400"
+          jq -e '.error == "unsupported_navigation_scheme"' /tmp/invalid.json
+          curl -fsS http://127.0.0.1:18081/browser/status | jq -e '.active == false'
+
+      - name: Failure path - duplicate start is rejected without corrupting active session
+        run: |
+          set -euo pipefail
+          URL='data:text/html,%3Ctitle%3EDuplicate%20Guard%3C/title%3E'
+          curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start > /tmp/first.json
+          sid=$(jq -r '.sessionId' /tmp/first.json)
+          code=$(curl -sS -o /tmp/duplicate.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start)
+          test "$code" = "409"
+          jq -e '.error == "browser_already_active"' /tmp/duplicate.json
+          test "$(curl -fsS http://127.0.0.1:18081/browser/status | jq -r '.sessionId')" = "$sid"
+          curl -fsS -X POST http://127.0.0.1:18081/browser/stop | jq -e '.cleanup.clean == true'
+
+      - name: Failure path - unexpected Chromium crash is detected and recoverable
+        run: |
+          set -euo pipefail
+          URL='data:text/html,%3Ctitle%3ECrash%20Recovery%3C/title%3E'
+          curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start >/tmp/crash-start.json
+          docker compose exec -T browser-worker sh -lc 'pkill -9 chromium || true'
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18081/browser/status >/tmp/post-crash.json && jq -e '.active == false' /tmp/post-crash.json >/dev/null; then break; fi
+            sleep 1
+          done
+          jq -e '.active == false and .lastDisconnect.reason == "browser_disconnected"' /tmp/post-crash.json
+          curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start | jq -e '.active == true'
+          curl -fsS -X POST http://127.0.0.1:18081/browser/stop | jq -e '.cleanup.clean == true'
+
+      - name: Failure path - worker restart cleans active browser and recovers
+        run: |
+          set -euo pipefail
+          URL='data:text/html,%3Ctitle%3ERestart%20Cleanup%3C/title%3E'
+          curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start | jq -e '.active == true'
+          docker compose restart browser-worker
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/health >/tmp/restart-health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          jq -e '.status == "ok" and .phase == 2' /tmp/restart-health.json
+          curl -fsS http://127.0.0.1:18081/browser/status | jq -e '.active == false and (.chromiumPids|length) == 0'
+
+      - name: Final lifecycle regression
+        run: |
+          set -euo pipefail
+          URL='data:text/html,%3Ctitle%3EFinal%20Regression%3C/title%3E'
+          curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start | jq -e '.active == true and .title == "Final Regression"'
+          curl -fsS -X POST http://127.0.0.1:18081/browser/stop | jq -e '.cleanup.clean == true'
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=toprated-browser-runtime)"
