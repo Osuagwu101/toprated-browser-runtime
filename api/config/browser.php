@@ -8,5 +8,5 @@ return [
     'viewer_signing_secret' => (string) env('VIEWER_SIGNING_SECRET', ''),
     'viewer_token_ttl_seconds' => (int) env('VIEWER_TOKEN_TTL_SECONDS', 300),
     'viewer_public_base_url' => rtrim((string) env('VIEWER_PUBLIC_BASE_URL', 'http://127.0.0.1:18081'), '/'),
-    'max_browser_sessions' => (int) env('MAX_BROWSER_SESSIONS', 1),
+    'max_browser_sessions' => (int) env('MAX_BROWSER_SESSIONS', 3),
 ];
