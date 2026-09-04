@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { MAX_SUPPORTED_BROWSER_SESSIONS } from './browser-session.mjs';
+import { MAX_SUPPORTED_BROWSER_SESSIONS, RUNTIME_PHASE } from './browser-session.mjs';
 
 export function buildHealthPayload(env = process.env) {
   const browserExecutable = env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium';
@@ -9,10 +9,11 @@ export function buildHealthPayload(env = process.env) {
   return {
     status: capacityConfigured && chromiumInstalled ? 'ok' : 'degraded',
     service: 'browser-worker',
-    phase: 5,
+    phase: RUNTIME_PHASE,
     browserCore: 'generic',
     control: 'cdp',
     lifecycleOwner: 'laravel',
+    crashWatchdog: 'process-exit-cleanup',
     viewer: {
       mode: 'restricted-frame-input',
       auth: 'signed-bearer',
