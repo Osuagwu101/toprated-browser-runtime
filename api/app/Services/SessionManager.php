@@ -234,7 +234,7 @@ final class SessionManager
                 $summary['examinedSessions']++;
 
                 try {
-                    $this->withSessionLock((string) $sessionId, function () use ($sessionId, $lifecycle, $now, $workerSessions, &$summary): void {
+                    $this->withSessionLock((string) $sessionId, function () use ($sessionId, $lifecycle, $now, &$workerSessions, &$summary): void {
                         $session = BrowserSession::query()->find($sessionId);
                         if ($session === null || ! in_array($session->status, self::OPEN_STATUSES, true)) {
                             return;
@@ -258,6 +258,7 @@ final class SessionManager
                             }
 
                             $this->terminateSession($session, $session->termination_reason ?: 'reconciled_close', true);
+                            unset($workerSessions[$workerSessionId]);
                             $summary['closedInterruptedSessions']++;
                             return;
                         }
@@ -281,7 +282,11 @@ final class SessionManager
                             return;
                         }
 
+                        $workerSessionId = $session->worker_session_id;
                         $this->terminateSession($session, $reason, false);
+                        if ($workerSessionId !== null) {
+                            unset($workerSessions[$workerSessionId]);
+                        }
                         $summary['expiredSessions']++;
                     });
                 } catch (RuntimeApiException $exception) {
