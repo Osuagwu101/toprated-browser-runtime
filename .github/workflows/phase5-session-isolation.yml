@@ -5,6 +5,7 @@ on:
     branches:
       - phase5-session-isolation
       - phase6-lifecycle-management
+      - phase7-tool-profiles
       - main
   workflow_dispatch:
 
