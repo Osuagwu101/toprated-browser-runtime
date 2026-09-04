@@ -18,14 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install worker dependencies
-        working-directory: worker
-        run: npm install --ignore-scripts
-
-      - name: Validate worker unit tests
-        working-directory: worker
-        run: node --test
-
       - name: Validate PHP syntax
         run: find api -name '*.php' -print0 | xargs -0 -n1 php -l
 
@@ -38,6 +30,9 @@ jobs:
 
       - name: Build isolated runtime containers
         run: docker compose build
+
+      - name: Validate worker unit tests in runtime image
+        run: docker compose run --rm --no-deps browser-worker node --test
 
       - name: Boot isolated runtime
         run: docker compose up -d
