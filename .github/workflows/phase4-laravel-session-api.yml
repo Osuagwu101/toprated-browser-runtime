@@ -30,12 +30,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
       - name: Static and unit gates
         run: |
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
-          find api -name '*.php' -print0 | xargs -0 -n1 php -l
-          python3 -m json.tool api/composer.json >/dev/null
           grep -F "Route::post('/sessions'" api/routes/api.php
           grep -F "Route::post('/sessions/{session}/heartbeat'" api/routes/api.php
           grep -F "Route::post('/sessions/{session}/activity'" api/routes/api.php
