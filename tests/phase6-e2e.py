@@ -13,9 +13,9 @@ API = os.environ.get('API_BASE', 'http://127.0.0.1:18080')
 WORKER = os.environ.get('WORKER_BASE', 'http://127.0.0.1:18081')
 SERVICE_SECRET = os.environ['RUNTIME_SERVICE_AUTH_SECRET'].encode()
 WORKER_SECRET = os.environ['WORKER_CONTROL_SECRET']
-LEASE_SECONDS = int(os.environ.get('SESSION_LEASE_SECONDS', '30'))
-IDLE_SECONDS = int(os.environ.get('SESSION_IDLE_TIMEOUT_SECONDS', '20'))
-DISCONNECT_SECONDS = int(os.environ.get('SESSION_DISCONNECT_GRACE_SECONDS', '12'))
+LEASE_SECONDS = int(os.environ.get('SESSION_LEASE_SECONDS', '70'))
+IDLE_SECONDS = int(os.environ.get('SESSION_IDLE_TIMEOUT_SECONDS', '60'))
+DISCONNECT_SECONDS = int(os.environ.get('SESSION_DISCONNECT_GRACE_SECONDS', '30'))
 
 
 def signed(method, path, writer, obj=None):
@@ -190,7 +190,8 @@ assert code == 200 and explicitly_closed['terminationReason'] == 'explicit_close
 
 # 2) Reconnect within disconnect grace refreshes heartbeat and keeps the exact browser/PID alive.
 reconnect, reconnect_worker, reconnect_pid = create_session('phase6-reconnect')
-db_update(reconnect['sessionId'], "last_heartbeat_at=datetime('now','-10 seconds'), last_activity_at=datetime('now'), lease_expires_at=datetime('now','+60 seconds')")
+pre_reconnect_age = max(1, DISCONNECT_SECONDS - 2)
+db_update(reconnect['sessionId'], f"last_heartbeat_at=datetime('now','-{pre_reconnect_age} seconds'), last_activity_at=datetime('now'), lease_expires_at=datetime('now','+60 seconds')")
 pre_reconnect = db_row(reconnect['sessionId'])
 code, fresh_grant = signed('POST', f"/api/sessions/{reconnect['sessionId']}/viewer-grant", 'phase6-reconnect', {})
 assert code == 200 and fresh_grant['viewerGrant'], (code, fresh_grant)
