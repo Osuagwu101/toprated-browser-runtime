@@ -1,0 +1,113 @@
+name: Self-Hosted Browser Phase 3 CI
+
+on:
+  push:
+    branches: [phase3-secure-viewer]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase3-secure-viewer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate PHP syntax
+        run: find api -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Enforce generic runtime core
+        run: |
+          if grep -RniE 'phrasly|sneakwrite|stealthwriter' worker/src api/routes; then
+            echo 'Tool-specific product name found in generic runtime core.'
+            exit 1
+          fi
+
+      - name: Build isolated runtime containers
+        run: docker compose build
+
+      - name: Run worker unit tests in runtime image
+        run: docker compose run --rm --no-deps browser-worker node --test 'test/*.test.js'
+
+      - name: Boot isolated runtime
+        run: docker compose up -d
+
+      - name: Wait for Phase 3 health
+        run: |
+          set -uo pipefail
+          ready=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/health >/tmp/api-health.json 2>/dev/null \
+              && curl -fsS http://127.0.0.1:18081/health >/tmp/worker-health.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "1" ]; then
+            docker compose ps -a || true
+            docker compose logs --no-color --tail=250 api browser-worker || true
+            exit 1
+          fi
+          set -e
+          cat /tmp/api-health.json
+          cat /tmp/worker-health.json
+          jq -e '.status == "ok" and .phase == 3 and .tool_specific == false and .viewer == "restricted_websocket" and .raw_cdp_exposed == false' /tmp/api-health.json
+          jq -e '.status == "ok" and .phase == 3 and .provider == "self_hosted" and .toolSpecific == false and .viewer == "restricted_websocket" and .rawCdpExposed == false and .chromium.available == true' /tmp/worker-health.json
+
+      - name: Verify worker is bound only to localhost
+        run: |
+          set -euo pipefail
+          binding=$(docker compose port browser-worker 8081)
+          echo "worker_binding=${binding}"
+          case "$binding" in
+            127.0.0.1:*) ;;
+            *) echo 'Browser worker is not restricted to localhost.'; exit 1 ;;
+          esac
+
+      - name: Install integration-test client dependencies
+        working-directory: worker
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Secure viewer end-to-end interaction test
+        run: node worker/test/phase3-integration.js
+
+      - name: Verify raw DevTools/CDP network port is not exposed
+        run: |
+          set -euo pipefail
+          if docker compose exec -T browser-worker sh -lc "ps -eo args | grep '[c]hromium' | grep -q -- '--remote-debugging-port='"; then
+            echo 'Chromium remote-debugging TCP port detected.'
+            docker compose exec -T browser-worker sh -lc "ps -eo args | grep '[c]hromium'" || true
+            exit 1
+          fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/json/version)" = "404"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/devtools/browser/test)" = "404"
+
+      - name: Phase 2 lifecycle regression after viewer testing
+        run: |
+          set -euo pipefail
+          URL='data:text/html,%3Ctitle%3EPhase%203%20Lifecycle%20Regression%3C/title%3E'
+          curl -fsS -X POST -H 'content-type: application/json' --data "{\"url\":\"${URL}\"}" http://127.0.0.1:18081/browser/start | jq -e '.active == true and .phase == 3 and .title == "Phase 3 Lifecycle Regression"'
+          curl -fsS -X POST http://127.0.0.1:18081/browser/stop | jq -e '.active == false and .cleanup.clean == true and (.cleanup.chromiumPids|length) == 0'
+
+      - name: Final worker health after viewer lifecycle
+        run: |
+          curl -fsS http://127.0.0.1:18081/health | jq -e '.status == "ok" and .phase == 3'
+          curl -fsS http://127.0.0.1:18081/browser/status | jq -e '.active == false and (.chromiumPids|length) == 0'
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --no-color --tail=300 api browser-worker || true
+          docker compose exec -T browser-worker sh -lc "ps -ef | head -100" || true
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=toprated-browser-runtime)"
