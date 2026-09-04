@@ -266,3 +266,63 @@ Verified exact-head runs:
 All four workflows passed the repository-wide `scripts/typecheck.sh` gate. The Phase 6 workflow also passed lifecycle/restart reconciliation, lease/activity/heartbeat behavior, idle/disconnect expiry, explicit close, worker crash/orphan cleanup, residue checks and zero durable open-record checks.
 
 No Critical or High Phase 6 issue is known open. Final documented-head and promoted-`main` validation are still required before owner approval and Phase 6 completion.
+
+# Phase 7 issues
+
+### SB-007-001 — Approved Phase 6 launch path had no authoritative generic tool-profile model
+
+Severity: High / Gate blocker.
+
+Observed: the approved Phase 6 runtime owned browser lifecycle and writer/session isolation, but launch destination was still supplied directly through the session launch request. There was no server-owned `tool_slug` -> configured profile resolution layer capable of proving the Phase 7 generic-tool gate.
+
+Underlying cause: tool-profile configuration was deliberately deferred by the Blueprint until Phase 7.
+
+Corrective action: added `ToolProfileRegistry`, a configurable JSON profile source, server-side profile validation, enabled/disabled policy and profile-owned launch destination resolution. `SessionController` now resolves the signed writer/tool request through the registry before Chromium creation. Unknown and disabled profiles fail closed, and a caller cannot replace the configured destination.
+
+Evidence: implementation commits beginning with `44148a1547e41c2504097fc67c6845d521a77012`, `72f693143a4f4faed7ffe5c48a610837830c93a5` and `5575b3afca29d91d7e8df20973541af4ab61ffd5`; exact implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed Phase 7 run `33926255054` and every inherited gate listed below.
+
+Status: **FIXED / CLOSED**.
+
+### SB-007-002 — Autonomous lifecycle reaper could interfere with inherited pre-reaper regression sequencing
+
+Severity: Medium.
+
+Observed: the Phase 7 verification stack initially started the Phase 6 autonomous reaper while inherited regression fixtures were still creating sessions under their historical test sequencing. That made an inherited test environment race against legitimate Phase 6 orphan-cleanup behavior rather than testing the historical behavior in isolation.
+
+Underlying cause: the new Phase 7 workflow composed inherited suites without preserving the same reaper boundary used by their authoritative Phase 6 workflows.
+
+Corrective action: boot Phase 4/5 inherited regressions without the autonomous reaper, then start the reaper before the inherited Phase 6 lifecycle/restart regression. Production lifecycle behavior is not weakened; the reaper remains mandatory for the Phase 6 portion and final cleanup checks.
+
+Evidence: corrective commit `7727cf0255f8edcf02ea4ed9e6a6792f3f8b9fdd`; exact implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed the Phase 4, Phase 5, Phase 6 and Phase 7 workflows.
+
+Status: **FIXED / CLOSED**.
+
+### SB-007-003 — API restart could expose a transient worker-read connection refusal
+
+Severity: Medium.
+
+Observed: inherited Phase 6 run `33919958668`, job `101175779193`, failed after `docker compose restart api`. Laravel became healthy, but an immediate idempotent API-to-worker session-status read briefly hit connection refusal and surfaced `WORKER_UNAVAILABLE`.
+
+Underlying cause: control-plane readiness and Docker-internal worker reachability can converge over a short interval after API restart, while `BrowserWorkerClient` treated the first connection-level failure on a read as final.
+
+Corrective action: added a bounded four-attempt, 100 ms connection retry only to idempotent worker reads (`health`, session list and session status). Session creation is intentionally not retried, preventing duplicate Chromium launch risk if a POST is processed but its response is lost. Permanent worker failure and worker HTTP errors still propagate normally. The inherited Phase 6 test was not weakened or skipped.
+
+Evidence / RED history: Phase 6 Lifecycle Management run `33919958668`, job `101175779193` — FAILURE. Corrected exact head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed Phase 6 run `33926255036` and all other authoritative workflows on the same SHA.
+
+Status: **FIXED / CLOSED**.
+
+## Phase 7 technical gate status
+
+The Phase 7 exit gate — **“The runtime can launch a generic configured tool without Phrasly-specific branching in core infrastructure”** — is technically satisfied on implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266`.
+
+Verified exact-head runs:
+
+- Verified Through Phase 3 run `33926255081` — SUCCESS;
+- Phase 4 Laravel Session API run `33926255136` — SUCCESS;
+- Phase 5 Session Isolation run `33926255038` — SUCCESS;
+- Phase 6 Lifecycle Management run `33926255036` — SUCCESS;
+- Phase 7 Generic Tool Profiles run `33926255054` — SUCCESS.
+
+The Phase 7 workflow proves configured generic launch, unknown/disabled profile rejection, caller launch-URL override rejection, same-writer/profile reuse, no Phrasly-specific reference in core runtime paths, no raw CDP exposure pattern, clean browser/profile teardown and zero durable open session records. All inherited Phase 1-6 behavioral gates remain active.
+
+No Critical or High Phase 7 issue is known open. Phase 7 remains **AWAITING OWNER APPROVAL**; Phase 8 must not start before explicit approval.
