@@ -7,7 +7,9 @@ Route::get('/health', static function () {
         'status' => 'ok',
         'service' => 'browser-runtime-api',
         'provider' => 'self_hosted',
-        'phase' => 2,
+        'phase' => 3,
         'tool_specific' => false,
+        'viewer' => 'restricted_websocket',
+        'raw_cdp_exposed' => false,
     ]);
 });
