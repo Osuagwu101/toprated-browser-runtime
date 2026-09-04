@@ -1,0 +1,34 @@
+name: toprated-browser-runtime
+
+services:
+  api:
+    build:
+      context: ./api
+    environment:
+      APP_NAME: TopRatedBrowserRuntime
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      LOG_CHANNEL: stderr
+    ports:
+      - "${API_PORT:-18080}:8080"
+    restart: unless-stopped
+    networks:
+      - runtime-private
+
+  browser-worker:
+    build:
+      context: ./worker
+    environment:
+      PORT: 8081
+      CHROMIUM_PATH: ${CHROMIUM_PATH:-/usr/bin/chromium}
+      LOG_LEVEL: ${WORKER_LOG_LEVEL:-info}
+    ports:
+      - "${WORKER_PORT:-18081}:8081"
+    restart: unless-stopped
+    networks:
+      - runtime-private
+
+networks:
+  runtime-private:
+    driver: bridge

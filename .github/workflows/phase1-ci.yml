@@ -1,0 +1,72 @@
+name: Self-Hosted Browser Phase 1 CI
+
+on:
+  push:
+    branches: [main, phase1-runtime]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  phase1-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate worker unit tests
+        working-directory: worker
+        run: |
+          npm install --ignore-scripts
+          npm test
+
+      - name: Validate PHP syntax
+        run: find api -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Validate dependency manifests
+        run: |
+          composer validate --no-check-publish api/composer.json
+          python3 -m json.tool worker/package.json >/dev/null
+
+      - name: Enforce generic Phase 1 core
+        run: |
+          if grep -RniE 'phrasly|sneakwrite|stealthwriter' worker/src api/routes; then
+            echo 'Tool-specific product name found in generic runtime core.'
+            exit 1
+          fi
+
+      - name: Build isolated runtime containers
+        run: docker compose build
+
+      - name: Boot isolated runtime
+        run: docker compose up -d
+
+      - name: Wait for health endpoints
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/health >/tmp/api-health.json \
+              && curl -fsS http://127.0.0.1:18081/health >/tmp/worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/api-health.json
+          cat /tmp/worker-health.json
+          jq -e '.status == "ok" and .service == "browser-runtime-api" and .tool_specific == false' /tmp/api-health.json
+          jq -e '.status == "ok" and .service == "browser-worker" and .provider == "self_hosted" and .toolSpecific == false and .chromium.available == true' /tmp/worker-health.json
+
+      - name: Check running containers
+        run: |
+          docker compose ps
+          test "$(docker compose ps --status running --services | wc -l)" -eq 2
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=toprated-browser-runtime)"
