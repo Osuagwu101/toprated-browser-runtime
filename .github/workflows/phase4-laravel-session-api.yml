@@ -43,6 +43,11 @@ jobs:
           grep -F "hash_hmac('sha256'" api/app/Http/Middleware/VerifyServiceRequest.php
           grep -F "authorizeWorkerControl(request)" browser-worker/src/server.mjs
           grep -F "WORKER_CONTROL_SECRET" docker-compose.yml
+          grep -F "grantIssuer: 'laravel'" browser-worker/src/health.mjs
+          if grep -F "issueViewerGrant" browser-worker/src/server.mjs; then
+            echo 'Browser worker must not issue production viewer grants in Phase 4.' >&2
+            exit 1
+          fi
           if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
             echo 'Phase 4 production runtime contains tool-specific Phrasly logic.' >&2
             exit 1
@@ -73,12 +78,16 @@ jobs:
           python3 - <<'PY'
           import json
           h=json.load(open('/tmp/phase4-health.json'))
+          w=json.load(open('/tmp/phase4-worker-health.json'))
           assert h['status']=='ok', h
           assert h['phase']==4, h
           assert h['session_owner']=='laravel', h
           assert h['service_auth']=='hmac-sha256-timestamp-nonce-v1', h
           assert h['database']=='ok', h
           assert h['browser_worker']=='ok', h
+          assert w['phase']==4, w
+          assert w['lifecycleOwner']=='laravel', w
+          assert w['viewer']['grantIssuer']=='laravel', w
           PY
 
       - name: Preserve Phase 1-3 browser and viewer regression
