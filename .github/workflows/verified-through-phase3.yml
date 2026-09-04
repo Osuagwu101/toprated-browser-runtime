@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - verified-through-phase3
+      - phase4-ci-baseline-fix
       - main
   workflow_dispatch:
 
@@ -11,8 +12,14 @@ permissions:
   contents: read
 
 env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
   VIEWER_SIGNING_SECRET: standalone-ci-only-signing-secret-not-for-production-0123456789abcdef
   VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: standalone-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: standalone-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 1
 
 jobs:
   verified-baseline:
@@ -35,13 +42,18 @@ jobs:
           set -euo pipefail
           grep -F -- "--remote-debugging-address=127.0.0.1" browser-worker/src/browser-session.mjs
           grep -F -- "rawCdpExposed: false" browser-worker/src/health.mjs
-          grep -F -- "url-fragment-to-bearer" browser-worker/src/server.mjs
+          grep -F -- "grantIssuer: 'laravel'" browser-worker/src/health.mjs
+          grep -F -- "url-fragment-to-bearer" api/app/Services/ViewerGrantService.php
           grep -F -- "frame-ancestors 'none'" browser-worker/src/server.mjs
+          if grep -F "issueViewerGrant" browser-worker/src/server.mjs; then
+            echo 'Browser worker unexpectedly issues viewer grants; Laravel must remain the grant issuer.' >&2
+            exit 1
+          fi
           if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
             echo 'Unsafe raw CDP exposure pattern found.' >&2
             exit 1
           fi
-          if grep -R --line-number -i 'phrasly' browser-worker/src api; then
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
             echo 'Production runtime contains tool-specific Phrasly logic.' >&2
             exit 1
           fi

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase4-laravel-session-api
+      - phase4-ci-baseline-fix
       - main
   workflow_dispatch:
 
