@@ -1,0 +1,157 @@
+name: Phase 7 Generic Tool Profiles
+
+on:
+  push:
+    branches:
+      - phase7-tool-profiles
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase7-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase7-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase7-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 5
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+
+jobs:
+  phase7-tool-profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Phase 7 static and unit gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          test -f api/app/Services/ToolProfileRegistry.php
+          test -f api/config/tool-profiles.json
+          grep -F "ToolProfileRegistry" api/app/Http/Controllers/SessionController.php
+          grep -F "LAUNCH_URL_OVERRIDE_FORBIDDEN" api/app/Http/Controllers/SessionController.php
+          grep -F "generic-phase7-smoke" api/config/tool-profiles.json
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
+            echo 'Phase 7 core runtime contains Phrasly-specific branching.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+
+      - name: Build Phase 7 containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then
+              echo 'compose_build=pass'
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo 'compose_build=fail attempts=3' >&2
+              exit 1
+            fi
+            echo "compose_build_retry_in_seconds=${delay}" >&2
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
+
+      - name: Boot runtime
+        run: docker compose up -d
+
+      - name: Wait for health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase7-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase7-worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/phase7-health.json
+          cat /tmp/phase7-worker-health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/phase7-health.json'))
+          w=json.load(open('/tmp/phase7-worker-health.json'))
+          assert h['status']=='ok', h
+          assert h['browser_core']=='generic', h
+          assert w['status']=='ok', w
+          assert w['browserCore']=='generic', w
+          assert w['viewer']['rawCdpExposed'] is False, w
+          PY
+
+      - name: Preserve Phase 4 Laravel ownership regression
+        run: python3 tests/phase4-e2e.py
+
+      - name: Start same-origin isolation fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/isolation-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Preserve Phase 5 isolation regression
+        run: python3 tests/phase5-e2e.py
+
+      - name: Phase 7 configured generic tool E2E
+        run: python3 tests/phase7-e2e.py
+
+      - name: Preserve Phase 6 lifecycle and restart regression
+        run: python3 tests/phase6-e2e.py
+
+      - name: Verify no browser process or profile residue
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
+          console.log('phase7_cleanup_scan=clean');
+          NODE
+
+      - name: Verify durable records are terminal
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "open_sessions=0\n";
+          '
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
