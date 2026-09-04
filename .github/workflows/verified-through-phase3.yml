@@ -5,6 +5,7 @@ on:
     branches:
       - verified-through-phase3
       - phase4-ci-baseline-fix
+      - phase5-session-isolation
       - main
   workflow_dispatch:
 
@@ -19,7 +20,7 @@ env:
   WORKER_CONTROL_SECRET: standalone-ci-worker-control-secret-not-for-production-0123456789abcdef
   SERVICE_AUTH_MAX_SKEW_SECONDS: 300
   VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
-  MAX_BROWSER_SESSIONS: 1
+  MAX_BROWSER_SESSIONS: 3
 
 jobs:
   verified-baseline:
