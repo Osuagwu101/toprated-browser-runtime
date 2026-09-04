@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - verified-through-phase3
+      - main
   workflow_dispatch:
 
 permissions:
