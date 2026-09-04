@@ -20,9 +20,7 @@ jobs:
 
       - name: Validate worker unit tests
         working-directory: worker
-        run: |
-          npm install --ignore-scripts
-          npm test
+        run: node --test
 
       - name: Validate PHP syntax
         run: find api -name '*.php' -print0 | xargs -0 -n1 php -l
