@@ -19,10 +19,10 @@ env:
   SERVICE_AUTH_MAX_SKEW_SECONDS: 300
   VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
   MAX_BROWSER_SESSIONS: 3
-  SESSION_LEASE_SECONDS: 30
-  SESSION_IDLE_TIMEOUT_SECONDS: 20
-  SESSION_DISCONNECT_GRACE_SECONDS: 12
-  SESSION_STARTUP_GRACE_SECONDS: 4
+  SESSION_LEASE_SECONDS: 70
+  SESSION_IDLE_TIMEOUT_SECONDS: 60
+  SESSION_DISCONNECT_GRACE_SECONDS: 30
+  SESSION_STARTUP_GRACE_SECONDS: 5
   SESSION_REAPER_INTERVAL_SECONDS: 1
 
 jobs:
@@ -85,10 +85,10 @@ jobs:
           assert h['phase']==6, h
           assert h['session_owner']=='laravel', h
           assert h['lifecycle']=={
-              'leaseSeconds':30,
-              'idleTimeoutSeconds':20,
-              'disconnectGraceSeconds':12,
-              'startupGraceSeconds':4,
+              'leaseSeconds':70,
+              'idleTimeoutSeconds':60,
+              'disconnectGraceSeconds':30,
+              'startupGraceSeconds':5,
               'reaperIntervalSeconds':1,
           }, h
           assert w['status']=='ok', w
