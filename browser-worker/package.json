@@ -1,0 +1,14 @@
+{
+  "name": "@toprated/browser-worker",
+  "version": "0.3.0-phase3",
+  "private": true,
+  "type": "module",
+  "description": "Generic Chromium worker with restricted signed-token viewer access for the Top Rated self-hosted browser runtime.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
