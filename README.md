@@ -13,11 +13,12 @@ Verified status:
 - Phase 3 — restricted signed-token viewer with mouse, keyboard, scroll and reconnect support, without writer-facing raw CDP/DevTools exposure: GREEN.
 - Phase 4 — Laravel Session API & Ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 5 — writer/browser isolation and session ownership: **GREEN / COMPLETE / APPROVED**.
-- Phase 6 — lifecycle management: **TECHNICALLY GREEN / FINAL DOCUMENTED-HEAD VALIDATION IN PROGRESS**.
+- Phase 6 — lifecycle management: **GREEN / COMPLETE / APPROVED**.
+- Phase 7 — generic tool-profile framework: **NOT STARTED**.
 
 The existing Browser Use production path remains untouched.
 
-## Phase 6 technical evidence
+## Phase 6 closure evidence
 
 Phase 6 was developed from approved Phase 5 standalone `main` commit `e2778c394d40565453e3ed45f991f2f3030cc625`.
 
@@ -33,16 +34,25 @@ The implementation provides:
 
 Production defaults remain the Blueprint values: 5400-second lease, approximately 900-second idle timeout and approximately 180-second disconnect grace. CI uses valid accelerated values to exercise the same policy within bounded test time.
 
-The exact typecheck-enabled Phase 6 implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` passed all four authoritative workflows on the same SHA:
+The exact final documented Phase 6 branch head `c708ee10016c2012fb400a25351f8afdf18e7847` passed all four authoritative workflows on the same SHA:
 
-- Verified Through Phase 3 — run `33907235930`;
-- Phase 4 Laravel Session API — run `33907235955`;
-- Phase 5 Session Isolation — run `33907235924`; and
-- Phase 6 Lifecycle Management — run `33907235859`.
+- Verified Through Phase 3 — run `33909732417`;
+- Phase 4 Laravel Session API — run `33909732370`;
+- Phase 5 Session Isolation — run `33909732414`; and
+- Phase 6 Lifecycle Management — run `33909732404`.
 
-Each current workflow runs `scripts/typecheck.sh`, which checks all Node `.mjs` files with `node --check`, all non-vendor PHP files with `php -l`, Python tests with `py_compile`, JSON manifests with `json.tool`, and Docker Compose configuration with `docker compose config --quiet`.
+That tested head was promoted through PR #7 to standalone `main` commit `20a81157554e70386be3291ee564fe39514a5041`. The resulting `main` head then passed the same four authoritative workflows again:
 
-The final Phase 6 audit is recorded in `docs/audits/phase-6.md`, and `docs/audits/ISSUE_REGISTER.md` preserves `SB-006-001` through `SB-006-004`, including the RED-run history and corrective actions. Phase 6 is not marked COMPLETE until this final documented head and the resulting promoted `main` both pass all four workflows and the owner explicitly approves closure.
+- Verified Through Phase 3 — run `33910146825`;
+- Phase 4 Laravel Session API — run `33910146517`;
+- Phase 5 Session Isolation — run `33910146434`; and
+- Phase 6 Lifecycle Management — run `33910146416`.
+
+Each authoritative workflow runs `scripts/typecheck.sh`, which checks all Node `.mjs` files with `node --check`, all non-vendor PHP files with `php -l`, Python tests with `py_compile`, JSON manifests with `json.tool`, and Docker Compose configuration with `docker compose config --quiet`.
+
+The final Phase 6 audit is recorded in `docs/audits/phase-6.md`. `docs/audits/ISSUE_REGISTER.md` preserves `SB-006-001` through `SB-006-004`, including the RED-run history and corrective actions; all four findings are **FIXED / CLOSED**. The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
+
+Owner approval for Phase 6 was received on 2026-09-04. Phase 6 is therefore **GREEN / COMPLETE / APPROVED**. Phase 7 is eligible to start only on an explicit later instruction and has **not** been started automatically.
 
 ## Architecture
 
