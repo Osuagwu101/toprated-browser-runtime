@@ -192,4 +192,77 @@ The Phase 5 exit gate — **“Writer/browser isolation passes”** — is satis
 
 The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
 
-No Critical or High Phase 5 issue remains open. Phase 6 is **NOT STARTED**.
+No Critical or High Phase 5 issue remains open. Phase 6 is **IN TEST / CLOSURE**.
+
+# Phase 6 issues
+
+### SB-006-001 — Accelerated lifecycle CI initially violated runtime configuration bounds
+
+Severity: Medium.
+
+Observed: the first Phase 6 CI policy used lifecycle values below the runtime's own accepted minimums, so the workflow was exercising invalid configuration rather than the lifecycle gate.
+
+Underlying cause: the test harness shortened timeouts for CI without deriving them from the same validation bounds enforced by the runtime.
+
+Corrective action: changed accelerated CI policy to valid minimum-range values (`70s` lease, `60s` idle, `30s` disconnect, `5s` startup, `1s` reaper) and made the reconnect fixture derive its near-timeout timestamp from the configured disconnect grace.
+
+Evidence / RED history: early Phase 6 runs on heads including `8df07a543bbbfd76c6f85965aa7e7f2141c1821f` and `1cb3b1bfe3afd5cd97b8ca7f118cd539b613e8c4` were retained as RED history rather than relabelled. Exact corrected implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` later passed the dedicated Phase 6 gate.
+
+Status: **FIXED / CLOSED**.
+
+### SB-006-002 — Authoritative workflows were vulnerable to transient external container/package retrieval failures
+
+Severity: Medium.
+
+Observed: repository type/syntax and local/unit gates could pass, then image builds fail before application E2E because external registries or package mirrors were unavailable. Examples include Phase 6 run `33902499847`, job `101119604708`, where Composer/GitHub retrieval returned HTTP 504, and run `33902328749`, job `101119058078`, where Debian package retrieval failed after `deb.debian.org` name resolution failed. Other early runs in the same Phase 6 sequence encountered Docker Hub HTTP 429 throttling during image builds.
+
+Underlying cause: four authoritative workflows could simultaneously rebuild the same Docker images and depended on unauthenticated external registry/package availability; a single transient network failure immediately failed the workflow.
+
+Corrective action: all four authoritative workflows now wrap `docker compose build` in a bounded three-attempt retry with increasing delay. Persistent application, typecheck, unit, E2E or repeated build failures still fail the gate; the retry only protects against short-lived external retrieval faults.
+
+Evidence / RED history: failed runs remain in Actions history, including `33902499847`, `33902328749`, `33902328523`, `33902328488`, `33902328695`, `33902296862` and `33902296868`. The corrected exact implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` subsequently passed all four authoritative workflows on the same SHA.
+
+Status: **FIXED / CLOSED**.
+
+### SB-006-003 — Shared GitHub Actions concurrency group cancelled required inherited gates
+
+Severity: Medium.
+
+Observed: a CI-hardening attempt placed all four workflows in one shared Actions concurrency group. GitHub retained only one running and one pending item, so other inherited gates were cancelled rather than queued.
+
+Underlying cause: the concurrency mechanism was incorrectly treated as a cross-workflow serialization queue, but its semantics intentionally replace/cancel pending work within the group.
+
+Corrective action: removed the shared cross-workflow concurrency group so all four required gates execute independently. Bounded Docker build retries were retained to address the actual registry/network failure mode without suppressing inherited verification.
+
+Evidence / RED history: the cancelled runs remain part of the Phase 6 audit trail and were not counted as passing evidence. Fresh runs were required after removing the concurrency group.
+
+Status: **FIXED / CLOSED**.
+
+### SB-006-004 — Reaper could issue a redundant second stop from its same-pass worker snapshot
+
+Severity: Medium.
+
+Observed: the reaper captured live worker sessions before processing durable Laravel records. After successfully terminating one expired/closing tracked session, that worker ID still remained in the original snapshot and could be encountered again by the later orphan sweep.
+
+Underlying cause: the worker snapshot was not updated after same-pass tracked-session termination.
+
+Corrective action: after successful termination, the reaper immediately removes that worker session ID from its in-memory snapshot. The orphan sweep therefore only considers worker sessions that remain live/unaccounted-for after tracked-record processing.
+
+Evidence: the correction is included in exact implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540`, which passed all four authoritative workflows on the same SHA: Verified Through Phase 3 `33907235930`, Phase 4 Laravel Session API `33907235955`, Phase 5 Session Isolation `33907235924`, and Phase 6 Lifecycle Management `33907235859`. Each workflow also passed `scripts/typecheck.sh`.
+
+Status: **FIXED / CLOSED**.
+
+## Phase 6 technical gate status
+
+The Phase 6 exit gate — **“Active browsers survive; abandoned browsers disappear automatically”** — is technically satisfied on implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540`.
+
+Verified exact-head runs:
+
+- Verified Through Phase 3 run `33907235930` — SUCCESS;
+- Phase 4 Laravel Session API run `33907235955` — SUCCESS;
+- Phase 5 Session Isolation run `33907235924` — SUCCESS;
+- Phase 6 Lifecycle Management run `33907235859` — SUCCESS.
+
+All four workflows passed the repository-wide `scripts/typecheck.sh` gate. The Phase 6 workflow also passed lifecycle/restart reconciliation, lease/activity/heartbeat behavior, idle/disconnect expiry, explicit close, worker crash/orphan cleanup, residue checks and zero durable open-record checks.
+
+No Critical or High Phase 6 issue is known open. Final documented-head and promoted-`main` validation are still required before owner approval and Phase 6 completion.
