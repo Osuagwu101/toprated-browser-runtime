@@ -24,7 +24,7 @@ export function healthSnapshot() {
   return {
     status: 'ok',
     service: 'browser-worker',
-    phase: 1,
+    phase: 2,
     ...RUNTIME_IDENTITY,
     chromium: chromiumInfo(),
   };
