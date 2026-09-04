@@ -7,7 +7,7 @@ Route::get('/health', static function () {
         'status' => 'ok',
         'service' => 'browser-runtime-api',
         'provider' => 'self_hosted',
-        'phase' => 1,
+        'phase' => 2,
         'tool_specific' => false,
     ]);
 });
