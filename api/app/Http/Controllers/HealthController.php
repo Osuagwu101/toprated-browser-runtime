@@ -23,12 +23,16 @@ final class HealthController
             $databaseHealthy = false;
         }
 
+        $configuredMaxSessions = (int) config('browser.max_browser_sessions', 1);
         try {
             $health = $worker->health();
             $workerHealthy = ($health['status'] ?? null) === 'ok'
-                && ($health['phase'] ?? null) === 4
+                && ($health['phase'] ?? null) === 5
                 && ($health['lifecycleOwner'] ?? null) === 'laravel'
-                && ($health['viewer']['grantIssuer'] ?? null) === 'laravel';
+                && ($health['viewer']['grantIssuer'] ?? null) === 'laravel'
+                && ($health['viewer']['rawCdpExposed'] ?? true) === false
+                && ($health['capacity']['configurationValid'] ?? false) === true
+                && (int) ($health['capacity']['maxSessions'] ?? 0) === $configuredMaxSessions;
         } catch (Throwable) {
             $workerHealthy = false;
         }
@@ -37,7 +41,8 @@ final class HealthController
             $viewerGrants->assertConfigured();
             $configurationHealthy = strlen((string) config('browser.service_auth_secret', '')) >= 32
                 && strlen((string) config('browser.worker_control_secret', '')) >= 32
-                && (int) config('browser.max_browser_sessions', 1) === 1;
+                && $configuredMaxSessions >= 2
+                && $configuredMaxSessions <= 15;
         } catch (Throwable) {
             $configurationHealthy = false;
         }
@@ -47,7 +52,7 @@ final class HealthController
         return response()->json([
             'status' => $healthy ? 'ok' : 'degraded',
             'service' => 'control-plane',
-            'phase' => 4,
+            'phase' => 5,
             'browser_core' => 'generic',
             'session_owner' => 'laravel',
             'viewer_grant_issuer' => 'laravel',
@@ -55,6 +60,7 @@ final class HealthController
             'database' => $databaseHealthy ? 'ok' : 'unavailable',
             'browser_worker' => $workerHealthy ? 'ok' : 'unavailable',
             'configuration' => $configurationHealthy ? 'ok' : 'invalid',
+            'max_browser_sessions' => $configuredMaxSessions,
         ], $healthy ? 200 : 503);
     }
 }
