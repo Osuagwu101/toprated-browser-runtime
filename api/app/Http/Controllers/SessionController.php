@@ -4,12 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\RuntimeApiException;
 use App\Services\SessionManager;
+use App\Services\ViewerGrantService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 final class SessionController
 {
-    public function store(Request $request, SessionManager $sessions): JsonResponse
+    public function store(Request $request, SessionManager $sessions, ViewerGrantService $viewerGrants): JsonResponse
     {
         $writerId = $this->writerId($request);
         $bodyWriterId = trim((string) $request->input('writer_id', ''));
@@ -26,6 +27,8 @@ final class SessionController
             throw new RuntimeApiException('INVALID_LAUNCH_URL', 422, 'Launch URL must use http, https, or data:text/html.');
         }
 
+        // Fail before Chromium is created if the viewer cannot issue a usable grant.
+        $viewerGrants->assertConfigured();
         $result = $sessions->create($writerId, $toolSlug, $launchUrl);
 
         return response()->json($result, $result['reused'] ? 200 : 201);
