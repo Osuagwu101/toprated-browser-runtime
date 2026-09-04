@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateNavigationUrl, validateViewerInput } from '../src/browser-session.mjs';
+import { BrowserSessionController, validateNavigationUrl, validateViewerInput } from '../src/browser-session.mjs';
 
 test('accepts deterministic HTML data pages and normal web URLs', () => {
   assert.equal(validateNavigationUrl('https://example.com/'), 'https://example.com/');
@@ -30,4 +30,17 @@ test('accepts bounded text and keyboard input and rejects unsupported input type
   });
   assert.throws(() => validateViewerInput({ type: 'shell', command: 'id' }), /must be mouse, scroll, text, or key/);
   assert.throws(() => validateViewerInput({ type: 'text', text: 'x'.repeat(2001) }), /between 1 and 2000/);
+});
+
+test('Phase 5 capacity is configurable but bounded to the blueprint target', () => {
+  const controller = new BrowserSessionController({ executablePath: '/does/not/exist', maxSessions: 3 });
+  assert.deepEqual(controller.listStatus(), {
+    phase: 5,
+    activeCount: 0,
+    startingCount: 0,
+    maxSessions: 3,
+    sessions: [],
+  });
+  assert.throws(() => new BrowserSessionController({ maxSessions: 0 }), /between 1 and 15/);
+  assert.throws(() => new BrowserSessionController({ maxSessions: 16 }), /between 1 and 15/);
 });
