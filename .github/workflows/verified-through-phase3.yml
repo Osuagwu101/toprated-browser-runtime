@@ -6,6 +6,7 @@ on:
       - verified-through-phase3
       - phase4-ci-baseline-fix
       - phase5-session-isolation
+      - phase6-lifecycle-management
       - main
   workflow_dispatch:
 
@@ -60,8 +61,8 @@ jobs:
       - name: Build standalone containers
         run: docker compose build
 
-      - name: Boot standalone runtime
-        run: docker compose up -d
+      - name: Boot inherited regression runtime without autonomous reaper
+        run: docker compose up -d api browser-worker
 
       - name: Verify localhost-only publication
         run: |
