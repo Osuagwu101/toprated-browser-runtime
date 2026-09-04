@@ -50,13 +50,13 @@ def assert_http_error(req, expected):
     raise AssertionError(f'expected HTTP {expected}')
 
 
-# Phase 4 ownership boundary remains enforced after Phase 5 adds multi-session support.
+# Phase 4 ownership boundary remains enforced after later phases add isolation/lifecycle behavior.
 assert_http_error(request.Request(WORKER + '/browser/status'), 401)
 assert_http_error(request.Request(API + '/api/capacity'), 401)
 
 code, capacity = signed('GET', '/api/capacity', 'writer-a')
 assert code == 200, (code, capacity)
-assert capacity['phase'] == 5, capacity
+assert capacity['phase'] == 6, capacity
 assert capacity['configuredMaxSessions'] == 3, capacity
 assert capacity['effectiveMaxSessions'] == 3, capacity
 assert capacity['openSessions'] == 0, capacity
@@ -72,6 +72,7 @@ assert created['status'] == 'active', created
 assert created['writerId'] == 'writer-a', created
 assert created['toolSlug'] == 'generic-phase4-regression', created
 assert created['reused'] is False, created
+assert created['leaseExpiresAt'], created
 sid = created['sessionId']
 grant = created['viewerGrant']
 assert grant and grant['rawCdpExposed'] is False, grant
@@ -116,7 +117,7 @@ for method, path, body in [
 code, heartbeat = signed('POST', f'/api/sessions/{sid}/heartbeat', 'writer-a', {})
 assert code == 200 and heartbeat['lastHeartbeatAt'], (code, heartbeat)
 code, activity = signed('POST', f'/api/sessions/{sid}/activity', 'writer-a', {})
-assert code == 200 and activity['lastActivityAt'], (code, activity)
+assert code == 200 and activity['lastActivityAt'] and activity['leaseExpiresAt'], (code, activity)
 code, fresh_grant = signed('POST', f'/api/sessions/{sid}/viewer-grant', 'writer-a', {})
 assert code == 200 and fresh_grant['viewerGrant']['url'] != grant['url'], (code, fresh_grant)
 
@@ -133,9 +134,10 @@ assert code == 409 and replay['code'] == 'AUTH_REPLAY', (code, replay)
 code, closed = signed('DELETE', f'/api/sessions/{sid}', 'writer-a')
 assert code == 200 and closed['status'] == 'closed', (code, closed)
 assert closed['closedAt'], closed
+assert closed['terminationReason'] == 'explicit_close', closed
 assert_http_error(frame_req, 410)
 code, capacity = signed('GET', '/api/capacity', 'writer-a')
 assert code == 200 and capacity['openSessions'] == 0 and capacity['availableSlots'] == 3, capacity
 
 open('/tmp/phase4-session-id', 'w').write(sid)
-print(json.dumps({'result': 'PASS', 'phase4OwnershipRegression': True, 'currentPhase': 5, 'sessionId': sid}))
+print(json.dumps({'result': 'PASS', 'phase4OwnershipRegression': True, 'currentPhase': 6, 'sessionId': sid}))
