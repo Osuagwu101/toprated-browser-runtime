@@ -8,10 +8,6 @@ on:
       - main
   workflow_dispatch:
 
-concurrency:
-  group: browser-runtime-container-ci-${{ github.repository }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
