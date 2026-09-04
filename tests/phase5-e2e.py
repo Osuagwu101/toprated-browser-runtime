@@ -104,7 +104,7 @@ assert http_status(request.Request(WORKER + '/browser/sessions')) == 401
 
 code, capacity = signed('GET', '/api/capacity', 'writer-a')
 assert code == 200, (code, capacity)
-assert capacity['phase'] == 5, capacity
+assert capacity['phase'] == 6, capacity
 assert capacity['configuredMaxSessions'] == 3, capacity
 assert capacity['effectiveMaxSessions'] == 3, capacity
 assert capacity['openSessions'] == 0, capacity
@@ -124,6 +124,7 @@ def create_writer(writer):
     assert code == 201, (code, created)
     assert created['status'] == 'active', created
     assert created['writerId'] == writer, created
+    assert created['leaseExpiresAt'], created
     token, payload, viewer_url = decode_grant(created['viewerGrant'])
     assert payload['wid'] == writer, payload
     return created, token, payload, viewer_url
@@ -158,6 +159,7 @@ assert capacity['openSessions'] == 2, capacity
 assert capacity['workerActiveSessions'] == 2, capacity
 assert capacity['availableSlots'] == 1, capacity
 sessions = worker_json('GET', '/browser/sessions')
+assert sessions['phase'] == 6, sessions
 assert sessions['activeCount'] == 2, sessions
 assert {item['sessionId'] for item in sessions['sessions']} == {payload_a['sid'], payload_b['sid']}, sessions
 
@@ -220,6 +222,7 @@ assert capacity['availableSlots'] == 3, capacity
 print(json.dumps({
     'result': 'PASS',
     'phase': 5,
+    'currentPhase': 6,
     'simultaneousWriters': 2,
     'storageIsolation': True,
     'crossWriterOwnershipRejected': True,
