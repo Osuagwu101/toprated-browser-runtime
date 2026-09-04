@@ -1,8 +1,11 @@
 <?php
 
+use App\Exceptions\RuntimeApiException;
+use App\Http\Middleware\VerifyServiceRequest;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -11,9 +14,21 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Phase 1: no production integration middleware yet.
+        $middleware->alias([
+            'service.auth' => VerifyServiceRequest::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // Phase 1: use Laravel defaults; structured error policy arrives later.
+        $exceptions->render(function (RuntimeApiException $exception, Request $request) {
+            if (! $request->is('api/*')) {
+                return null;
+            }
+
+            return response()->json([
+                'status' => 'error',
+                'code' => $exception->errorCode,
+                'message' => $exception->getMessage(),
+            ], $exception->statusCode);
+        });
     })
     ->create();
