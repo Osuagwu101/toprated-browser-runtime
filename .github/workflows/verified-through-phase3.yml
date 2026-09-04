@@ -6,6 +6,7 @@ on:
       - verified-through-phase3
       - phase4-ci-baseline-fix
       - phase5-session-isolation
+      - phase6-lifecycle-management
       - main
   workflow_dispatch:
 
@@ -57,11 +58,27 @@ jobs:
             exit 1
           fi
 
-      - name: Build standalone containers
-        run: docker compose build
+      - name: Build standalone containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then
+              echo 'compose_build=pass'
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo 'compose_build=fail attempts=3' >&2
+              exit 1
+            fi
+            echo "compose_build_retry_in_seconds=${delay}" >&2
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
 
-      - name: Boot standalone runtime
-        run: docker compose up -d
+      - name: Boot inherited regression runtime without autonomous reaper
+        run: docker compose up -d api browser-worker
 
       - name: Verify localhost-only publication
         run: |

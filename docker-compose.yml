@@ -20,6 +20,11 @@ services:
       VIEWER_TOKEN_TTL_SECONDS: ${VIEWER_TOKEN_TTL_SECONDS:-300}
       VIEWER_PUBLIC_BASE_URL: ${VIEWER_PUBLIC_BASE_URL:-http://127.0.0.1:18081}
       MAX_BROWSER_SESSIONS: ${MAX_BROWSER_SESSIONS:-3}
+      SESSION_LEASE_SECONDS: ${SESSION_LEASE_SECONDS:-5400}
+      SESSION_IDLE_TIMEOUT_SECONDS: ${SESSION_IDLE_TIMEOUT_SECONDS:-900}
+      SESSION_DISCONNECT_GRACE_SECONDS: ${SESSION_DISCONNECT_GRACE_SECONDS:-180}
+      SESSION_STARTUP_GRACE_SECONDS: ${SESSION_STARTUP_GRACE_SECONDS:-30}
+      SESSION_REAPER_INTERVAL_SECONDS: ${SESSION_REAPER_INTERVAL_SECONDS:-30}
     ports:
       - "127.0.0.1:${API_PORT:-18080}:8080"
     volumes:
@@ -36,6 +41,43 @@ services:
       timeout: 3s
       retries: 5
       start_period: 20s
+
+  lifecycle-reaper:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    command: ["sh", "-lc", "while true; do php artisan browser:sessions:reap; sleep \"$${SESSION_REAPER_INTERVAL_SECONDS}\"; done"]
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_KEY: ${APP_KEY:?APP_KEY must be set}
+      LOG_CHANNEL: stderr
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DB_CONNECTION: sqlite
+      DB_DATABASE: /srv/runtime-api/storage/data/database.sqlite
+      BROWSER_WORKER_URL: http://browser-worker:8081
+      WORKER_CONTROL_SECRET: ${WORKER_CONTROL_SECRET:?WORKER_CONTROL_SECRET must be set}
+      RUNTIME_SERVICE_AUTH_SECRET: ${RUNTIME_SERVICE_AUTH_SECRET:?RUNTIME_SERVICE_AUTH_SECRET must be set}
+      SERVICE_AUTH_MAX_SKEW_SECONDS: ${SERVICE_AUTH_MAX_SKEW_SECONDS:-300}
+      VIEWER_SIGNING_SECRET: ${VIEWER_SIGNING_SECRET:?VIEWER_SIGNING_SECRET must be set}
+      VIEWER_TOKEN_TTL_SECONDS: ${VIEWER_TOKEN_TTL_SECONDS:-300}
+      VIEWER_PUBLIC_BASE_URL: ${VIEWER_PUBLIC_BASE_URL:-http://127.0.0.1:18081}
+      MAX_BROWSER_SESSIONS: ${MAX_BROWSER_SESSIONS:-3}
+      SESSION_LEASE_SECONDS: ${SESSION_LEASE_SECONDS:-5400}
+      SESSION_IDLE_TIMEOUT_SECONDS: ${SESSION_IDLE_TIMEOUT_SECONDS:-900}
+      SESSION_DISCONNECT_GRACE_SECONDS: ${SESSION_DISCONNECT_GRACE_SECONDS:-180}
+      SESSION_STARTUP_GRACE_SECONDS: ${SESSION_STARTUP_GRACE_SECONDS:-30}
+      SESSION_REAPER_INTERVAL_SECONDS: ${SESSION_REAPER_INTERVAL_SECONDS:-30}
+    volumes:
+      - runtime-data:/srv/runtime-api/storage/data
+    depends_on:
+      api:
+        condition: service_healthy
+      browser-worker:
+        condition: service_healthy
+    networks:
+      - browser-runtime
+    restart: unless-stopped
 
   browser-worker:
     build:

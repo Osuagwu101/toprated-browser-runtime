@@ -19,6 +19,7 @@ final class BrowserSession extends Model
         'worker_session_id',
         'last_heartbeat_at',
         'last_activity_at',
+        'lease_expires_at',
         'started_at',
         'closed_at',
         'termination_reason',
@@ -31,6 +32,7 @@ final class BrowserSession extends Model
         return [
             'last_heartbeat_at' => 'datetime',
             'last_activity_at' => 'datetime',
+            'lease_expires_at' => 'datetime',
             'started_at' => 'datetime',
             'closed_at' => 'datetime',
         ];

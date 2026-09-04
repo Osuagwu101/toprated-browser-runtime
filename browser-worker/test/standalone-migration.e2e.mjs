@@ -42,12 +42,13 @@ const apiHealth = (await jsonFetch(`${apiBase}/api/health`)).body;
 const workerHealth = (await jsonFetch(`${workerBase}/health`)).body;
 assert.equal(apiHealth.status, 'ok');
 assert.equal(apiHealth.service, 'control-plane');
-assert.equal(apiHealth.phase, 5);
+assert.equal(apiHealth.phase, 6);
 assert.equal(apiHealth.browser_core, 'generic');
 assert.equal(workerHealth.status, 'ok');
 assert.equal(workerHealth.service, 'browser-worker');
-assert.equal(workerHealth.phase, 5);
+assert.equal(workerHealth.phase, 6);
 assert.equal(workerHealth.lifecycleOwner, 'laravel');
+assert.equal(workerHealth.crashWatchdog, 'process-exit-cleanup');
 assert.equal(workerHealth.browserCore, 'generic');
 assert.equal(workerHealth.viewer.grantIssuer, 'laravel');
 assert.equal(workerHealth.viewer.rawCdpExposed, false);
@@ -60,7 +61,7 @@ for (let cycle = 1; cycle <= 3; cycle += 1) {
     method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: htmlData(`Lifecycle ${cycle}`) }),
   }, 201)).body;
   assert.equal(start.active, true);
-  assert.equal(start.phase, 5);
+  assert.equal(start.phase, 6);
   assert.equal(start.title, `Lifecycle ${cycle}`);
   assert.equal('viewerGrant' in start, false);
   assert.ok(Number.isInteger(start.pid) && start.pid > 1);
@@ -85,6 +86,7 @@ const start = (await jsonFetch(`${workerBase}/browser/start`, {
   method: 'POST', headers: { ...controlHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ url: `data:text/html,${encodeURIComponent(interactiveHtml)}` }),
 }, 201)).body;
 assert.equal(start.title, 'Viewer Ready');
+assert.equal(start.phase, 6);
 assert.equal(start.viewer, 'restricted');
 assert.equal('viewerGrant' in start, false);
 
@@ -155,10 +157,10 @@ assert.equal((await fetch(`${workerBase}${viewerPath}/frame`, { headers: auth })
 const finalWorker = (await jsonFetch(`${workerBase}/health`)).body;
 const finalBrowser = (await jsonFetch(`${workerBase}/browser/status`, { headers: controlHeaders })).body;
 assert.equal(finalWorker.status, 'ok');
-assert.equal(finalWorker.phase, 5);
+assert.equal(finalWorker.phase, 6);
 assert.equal(finalWorker.lifecycleOwner, 'laravel');
 assert.equal(finalWorker.viewer.grantIssuer, 'laravel');
 assert.equal(finalWorker.viewer.rawCdpExposed, false);
 assert.equal(finalBrowser.active, false);
 
-console.log(JSON.stringify({ result: 'PASS', phase1: true, phase2Cycles: 3, phase3Viewer: true, currentPhase: 5, sessionId: start.sessionId }));
+console.log(JSON.stringify({ result: 'PASS', phase1: true, phase2Cycles: 3, phase3Viewer: true, currentPhase: 6, sessionId: start.sessionId }));

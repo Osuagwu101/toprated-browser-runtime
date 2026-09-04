@@ -13,35 +13,41 @@ Verified status:
 - Phase 3 — restricted signed-token viewer with mouse, keyboard, scroll and reconnect support, without writer-facing raw CDP/DevTools exposure: GREEN.
 - Phase 4 — Laravel Session API & Ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 5 — writer/browser isolation and session ownership: **GREEN / COMPLETE / APPROVED**.
-- Phase 6 — NOT STARTED.
+- Phase 6 — lifecycle management: **TECHNICALLY GREEN / FINAL DOCUMENTED-HEAD VALIDATION IN PROGRESS**.
 
 The existing Browser Use production path remains untouched.
 
-## Phase 5 closure evidence
+## Phase 6 technical evidence
 
-Phase 5 was developed on `phase5-session-isolation` from approved Phase 4 standalone `main` commit `156372e912b4792baab471263202c5d867131ec4`.
+Phase 6 was developed from approved Phase 5 standalone `main` commit `e2778c394d40565453e3ed45f991f2f3030cc625`.
 
-The implementation proves:
+The implementation provides:
 
-- multiple simultaneous writer sessions using separate Chromium processes and separate temporary user-data directories;
-- cookie, `localStorage` and `sessionStorage` isolation even when writers use the same origin;
-- writer ownership enforcement for status, heartbeat, activity, viewer-grant renewal and close operations;
-- viewer grants remain bound to the exact worker session and cross-session token use is rejected;
-- killing one writer's Chromium does not terminate or corrupt another writer's active browser; and
-- explicit cleanup removes Chromium process and profile residue.
+- renewable 90-minute leases renewed by genuine activity rather than heartbeat alone;
+- configurable idle timeout, disconnect grace, startup grace and reaper interval;
+- reconnect within disconnect grace while preserving the same browser;
+- autonomous cleanup of expired, idle, disconnected, crashed and orphaned sessions;
+- restart reconciliation between durable Laravel records and live worker sessions;
+- independent worker process-exit cleanup without affecting another writer's browser; and
+- preservation of Phase 1-5 ownership, viewer security and browser-state isolation guarantees.
 
-The exact typecheck-enabled Phase 5 branch head `ea00b239e20382125e53ad317acf52ea1a071f29` passed:
+Production defaults remain the Blueprint values: 5400-second lease, approximately 900-second idle timeout and approximately 180-second disconnect grace. CI uses valid accelerated values to exercise the same policy within bounded test time.
 
-- inherited Phase 1-3 regression run `33883567911`;
-- Phase 4 Laravel ownership regression run `33883568115`; and
-- Phase 5 multi-writer isolation run `33883567965`.
+The exact typecheck-enabled Phase 6 implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` passed all four authoritative workflows on the same SHA:
+
+- Verified Through Phase 3 — run `33907235930`;
+- Phase 4 Laravel Session API — run `33907235955`;
+- Phase 5 Session Isolation — run `33907235924`; and
+- Phase 6 Lifecycle Management — run `33907235859`.
 
 Each current workflow runs `scripts/typecheck.sh`, which checks all Node `.mjs` files with `node --check`, all non-vendor PHP files with `php -l`, Python tests with `py_compile`, JSON manifests with `json.tool`, and Docker Compose configuration with `docker compose config --quiet`.
 
+The final Phase 6 audit is recorded in `docs/audits/phase-6.md`, and `docs/audits/ISSUE_REGISTER.md` preserves `SB-006-001` through `SB-006-004`, including the RED-run history and corrective actions. Phase 6 is not marked COMPLETE until this final documented head and the resulting promoted `main` both pass all four workflows and the owner explicitly approves closure.
+
 ## Architecture
 
-- `api/` — Laravel control plane: signed service API, persistent session records, writer ownership, capacity, lifecycle orchestration and viewer-grant issuance.
-- `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated Chromium profiles, restricted frame/input viewer and signed-grant verification.
+- `api/` — Laravel control plane: signed service API, persistent session records, writer ownership, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
+- `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated Chromium profiles, restricted frame/input viewer, signed-grant verification and per-session process-exit cleanup.
 - `docker-compose.yml` — portable Linux + Docker topology with persistent runtime DB storage and localhost-only host publication for the current development/CI environment.
 - `scripts/typecheck.sh` — repository-wide executable type/syntax/configuration gate for the current language/toolchain.
 - `docs/audits/` — phase gates, issue history and regression evidence.
@@ -66,7 +72,17 @@ Signed service routes:
 
 Service requests are HMAC-SHA256 signed with timestamp, nonce, writer identity and request-body hash. Replayed nonces are rejected. Worker lifecycle endpoints require a separate internal worker-control secret.
 
-Phase 5 removes the deliberate Phase 4 one-slot limitation. `MAX_BROWSER_SESSIONS` is configuration, is validated, and supports the blueprint design ceiling of 15. Phase 5 correctness CI uses 3 slots; broader 5/10/15 concurrency and server sizing remain Phase 18 and Phase 12 work respectively.
+`MAX_BROWSER_SESSIONS` is validated configuration from 1 through the blueprint design ceiling of 15. Broader 5/10/15 concurrency proof remains Phase 18 work rather than a Phase 6 claim.
+
+## Lifecycle model
+
+- Genuine writer activity renews the renewable session lease.
+- Heartbeat/reconnect updates connection liveness but does not fabricate genuine activity.
+- Idle, disconnected, expired and abandoned sessions are reaped automatically.
+- Worker crash/exit cleanup is exact-session scoped.
+- Laravel restart reconciliation preserves live valid sessions and removes stale durable records.
+- Worker restart reconciliation detects missing worker sessions, resolves stale records and restores usable capacity.
+- The reaper tolerates temporary worker unavailability rather than destructively assuming a healthy writer browser is gone.
 
 ## Viewer security model
 
@@ -95,18 +111,19 @@ curl http://127.0.0.1:18081/health
 docker compose down -v --remove-orphans
 ```
 
-Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNTIME_SERVICE_AUTH_SECRET`, `WORKER_CONTROL_SECRET`, `VIEWER_SIGNING_SECRET`, viewer TTL/base URL and a valid `MAX_BROWSER_SESSIONS` value from 1 through 15.
+Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNTIME_SERVICE_AUTH_SECRET`, `WORKER_CONTROL_SECRET`, `VIEWER_SIGNING_SECRET`, viewer TTL/base URL, valid `MAX_BROWSER_SESSIONS`, and valid lifecycle policy values.
 
 ## Blueprint sequencing
 
-Not implemented or claimed in Phase 5:
+Not implemented or claimed in Phase 6:
 
-- Phase 6 renewable 90-minute lease, genuine-activity renewal, idle/disconnect cleanup, watchdog/reaper and restart reconciliation;
 - Phase 7 generic tool-profile framework;
 - Phase 8 Phrasly saved-state injection and authenticated reference implementation;
-- later production provider routing, deployment, hardening and measured capacity work.
+- Phase 11/14 deployment hardening;
+- Phase 15 production provider integration;
+- Phase 18 empirical 5/10/15 safe-concurrency measurement.
 
-These remain later Blueprint gates. Phase 6 has not been started.
+These remain later Blueprint gates. Phase 7 has not been started.
 
 ## Financial rule
 
@@ -114,4 +131,4 @@ Final production capacity must run on predictable fixed-price Linux VPS infrastr
 
 ## Production safety
 
-This standalone repository is still pre-production. Phase 5 does not switch the live application from Browser Use. Provider integration happens only in the later Blueprint integration phase after the standalone runtime passes its subsequent gates.
+This standalone repository is still pre-production. Phase 6 does not switch the live application from Browser Use. Provider integration happens only in the later Blueprint integration phase after the standalone runtime passes its subsequent gates.

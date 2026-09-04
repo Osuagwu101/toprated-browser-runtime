@@ -21,7 +21,8 @@ final class SessionManager
     public function create(string $writerId, string $toolSlug, string $launchUrl): array
     {
         return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl): array {
-            $maxSessions = $this->assertPhase5CapacityConfiguration();
+            $maxSessions = $this->assertCapacityConfiguration();
+            $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
 
             $existing = BrowserSession::query()
@@ -35,11 +36,26 @@ final class SessionManager
                     throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
                 }
 
-                if ($existing->worker_session_id !== null && isset($workerSessions[$existing->worker_session_id])) {
-                    return $this->present($existing, true);
-                }
+                $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions): ?array {
+                    $fresh = BrowserSession::query()->find($existing->id);
+                    if ($fresh === null || ! in_array($fresh->status, self::OPEN_STATUSES, true)) {
+                        return null;
+                    }
 
-                $this->markFailed($existing, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
+                    if ($fresh->worker_session_id !== null && isset($workerSessions[$fresh->worker_session_id])) {
+                        $fresh->forceFill(['last_heartbeat_at' => now()])->save();
+
+                        return $this->present($fresh->fresh(), true);
+                    }
+
+                    $this->markFailed($fresh, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
+
+                    return null;
+                });
+
+                if ($reused !== null) {
+                    return $reused;
+                }
             }
 
             $open = $this->openSessionCount();
@@ -48,14 +64,16 @@ final class SessionManager
                 throw new RuntimeApiException('CAPACITY_FULL', 429, 'Self Hosted browser capacity is temporarily full.');
             }
 
+            $createdAt = now();
             $session = BrowserSession::query()->create([
                 'id' => (string) Str::uuid(),
                 'writer_id' => $writerId,
                 'tool_slug' => $toolSlug,
                 'launch_url' => $this->safeLaunchUrlForRecord($launchUrl),
                 'status' => 'starting',
-                'last_heartbeat_at' => now(),
-                'last_activity_at' => now(),
+                'last_heartbeat_at' => $createdAt,
+                'last_activity_at' => $createdAt,
+                'lease_expires_at' => $createdAt->copy()->addSeconds($lifecycle['leaseSeconds']),
             ]);
 
             try {
@@ -76,15 +94,16 @@ final class SessionManager
                 ->where('id', '!=', $session->id)
                 ->exists();
             if ($alreadyTracked) {
-                // Never terminate a worker session whose ownership is ambiguous. Phase 6 will reconcile it.
                 $this->markFailed($session, 'WORKER_SESSION_COLLISION', 'The worker returned a browser session identifier already tracked by another record.');
                 throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker returned a duplicate session identifier.');
             }
 
+            $activatedAt = now();
             $session->forceFill([
                 'status' => 'active',
                 'worker_session_id' => $workerSessionId,
-                'started_at' => now(),
+                'started_at' => $activatedAt,
+                'lease_expires_at' => $activatedAt->copy()->addSeconds($lifecycle['leaseSeconds']),
                 'failure_code' => null,
                 'failure_detail' => null,
             ])->save();
@@ -95,102 +114,231 @@ final class SessionManager
 
     public function status(string $sessionId, string $writerId): array
     {
-        $session = $this->owned($sessionId, $writerId);
-        if ($session->status === 'active' && $session->worker_session_id !== null) {
-            try {
-                $workerStatus = $this->worker->status($session->worker_session_id);
-                if (($workerStatus['active'] ?? false) !== true || ($workerStatus['sessionId'] ?? null) !== $session->worker_session_id) {
-                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
-                    $session = $session->fresh();
-                }
-            } catch (RuntimeApiException $exception) {
-                if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
-                    $this->markFailed($session, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
-                    $session = $session->fresh();
-                } else {
-                    throw $exception;
+        return $this->withSessionLock($sessionId, function () use ($sessionId, $writerId): array {
+            $session = $this->owned($sessionId, $writerId);
+            if ($session->status === 'active' && $session->worker_session_id !== null) {
+                try {
+                    $workerStatus = $this->worker->status($session->worker_session_id);
+                    if (($workerStatus['active'] ?? false) !== true || ($workerStatus['sessionId'] ?? null) !== $session->worker_session_id) {
+                        $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
+                        $session = $session->fresh();
+                    }
+                } catch (RuntimeApiException $exception) {
+                    if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
+                        $this->markFailed($session, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
+                        $session = $session->fresh();
+                    } else {
+                        throw $exception;
+                    }
                 }
             }
-        }
 
-        return $this->present($session, false, false);
+            return $this->present($session, false, false);
+        });
     }
 
     public function heartbeat(string $sessionId, string $writerId): array
     {
-        $session = $this->ownedOpen($sessionId, $writerId);
-        $session->forceFill(['last_heartbeat_at' => now()])->save();
+        return $this->withSessionLock($sessionId, function () use ($sessionId, $writerId): array {
+            $session = $this->ownedActive($sessionId, $writerId);
+            $session->forceFill(['last_heartbeat_at' => now()])->save();
 
-        return $this->present($session->fresh(), false, false);
+            return $this->present($session->fresh(), false, false);
+        });
     }
 
     public function activity(string $sessionId, string $writerId): array
     {
-        $session = $this->ownedOpen($sessionId, $writerId);
-        $session->forceFill(['last_activity_at' => now()])->save();
+        return $this->withSessionLock($sessionId, function () use ($sessionId, $writerId): array {
+            $session = $this->ownedActive($sessionId, $writerId);
+            $lifecycle = $this->lifecycleConfiguration();
+            $activityAt = now();
+            $session->forceFill([
+                'last_activity_at' => $activityAt,
+                'lease_expires_at' => $activityAt->copy()->addSeconds($lifecycle['leaseSeconds']),
+            ])->save();
 
-        return $this->present($session->fresh(), false, false);
+            return $this->present($session->fresh(), false, false);
+        });
     }
 
     public function viewerGrant(string $sessionId, string $writerId): array
     {
-        $session = $this->ownedOpen($sessionId, $writerId);
-        if ($session->status !== 'active' || $session->worker_session_id === null) {
-            throw new RuntimeApiException('SESSION_NOT_VIEWABLE', 409, 'The browser session is not ready for viewing.');
-        }
+        return $this->withSessionLock($sessionId, function () use ($sessionId, $writerId): array {
+            $session = $this->ownedActive($sessionId, $writerId);
+            if ($session->worker_session_id === null) {
+                throw new RuntimeApiException('SESSION_NOT_VIEWABLE', 409, 'The browser session is not ready for viewing.');
+            }
 
-        return [
-            'sessionId' => $session->id,
-            'viewerGrant' => $this->viewerGrants->issue($session->worker_session_id, $writerId),
-        ];
+            $session->forceFill(['last_heartbeat_at' => now()])->save();
+
+            return [
+                'sessionId' => $session->id,
+                'viewerGrant' => $this->viewerGrants->issue($session->worker_session_id, $writerId),
+            ];
+        });
     }
 
     public function close(string $sessionId, string $writerId): array
     {
-        $session = $this->owned($sessionId, $writerId);
-        if (in_array($session->status, self::TERMINAL_STATUSES, true)) {
-            return $this->present($session, false, false);
-        }
-
-        $workerSessionId = $session->worker_session_id;
-        $session->forceFill(['status' => 'closing'])->save();
-
-        if ($workerSessionId !== null) {
-            try {
-                $workerStatus = $this->worker->status($workerSessionId);
-                if (($workerStatus['sessionId'] ?? null) !== $workerSessionId) {
-                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
-                    throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker returned a different session; no other browser was terminated.');
-                }
-
-                $stop = $this->worker->stop($workerSessionId);
-                if (($stop['sessionId'] ?? $workerSessionId) !== $workerSessionId) {
-                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker stopped an unexpected browser session identity.');
-                    throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker stopped an unexpected session.');
-                }
-                $cleanup = is_array($stop['cleanup'] ?? null) ? $stop['cleanup'] : [];
-                $clean = ($cleanup['rootExited'] ?? false) === true
-                    && empty($cleanup['orphanPids'] ?? [])
-                    && empty($cleanup['zombiePids'] ?? []);
-                if (! $clean) {
-                    $this->markFailed($session, 'WORKER_CLEANUP_FAILED', 'The browser worker reported incomplete process cleanup.');
-                    throw new RuntimeApiException('WORKER_CLEANUP_FAILED', 502, 'The browser session did not clean up completely.');
-                }
-            } catch (RuntimeApiException $exception) {
-                if (! in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
-                    throw $exception;
-                }
-                // The exact worker session is already gone. Closing the record is safe and does not affect other sessions.
+        return $this->withSessionLock($sessionId, function () use ($sessionId, $writerId): array {
+            $session = $this->owned($sessionId, $writerId);
+            if (in_array($session->status, self::TERMINAL_STATUSES, true)) {
+                return $this->present($session, false, false);
             }
-        }
 
-        $session->forceFill([
-            'status' => 'closed',
-            'closed_at' => now(),
-            'termination_reason' => 'explicit_close',
-        ])->save();
+            $this->terminateSession($session, 'explicit_close', true);
 
-        return $this->present($session->fresh(), false, false);
+            return $this->present($session->fresh(), false, false);
+        });
+    }
+
+    public function reap(): array
+    {
+        $lifecycle = $this->lifecycleConfiguration();
+        $now = now();
+
+        return $this->withCreationLock(function () use ($lifecycle, $now): array {
+            $summary = [
+                'phase' => 6,
+                'status' => 'ok',
+                'workerAvailable' => true,
+                'examinedSessions' => 0,
+                'expiredSessions' => 0,
+                'failedMissingWorkerSessions' => 0,
+                'closedInterruptedSessions' => 0,
+                'staleStartingSessions' => 0,
+                'leasesInitialized' => 0,
+                'orphanWorkerSessionsStopped' => 0,
+                'orphanCleanupDeferred' => 0,
+                'errors' => [],
+            ];
+
+            try {
+                $workerSessions = $this->workerSessionIndex();
+            } catch (RuntimeApiException $exception) {
+                $summary['status'] = 'deferred';
+                $summary['workerAvailable'] = false;
+                $summary['deferredReason'] = $exception->errorCode;
+
+                return $summary;
+            }
+
+            $openIds = BrowserSession::query()
+                ->whereIn('status', self::OPEN_STATUSES)
+                ->orderBy('created_at')
+                ->pluck('id')
+                ->all();
+
+            foreach ($openIds as $sessionId) {
+                $summary['examinedSessions']++;
+
+                try {
+                    $this->withSessionLock((string) $sessionId, function () use ($sessionId, $lifecycle, $now, &$workerSessions, &$summary): void {
+                        $session = BrowserSession::query()->find($sessionId);
+                        if ($session === null || ! in_array($session->status, self::OPEN_STATUSES, true)) {
+                            return;
+                        }
+
+                        if ($session->status === 'starting') {
+                            $createdAt = $session->created_at ?? $now;
+                            if ($createdAt->copy()->addSeconds($lifecycle['startupGraceSeconds'])->lte($now)) {
+                                $this->markFailed($session, 'STARTUP_TIMEOUT', 'The browser session did not finish starting before the startup grace period elapsed.');
+                                $summary['staleStartingSessions']++;
+                            }
+                            return;
+                        }
+
+                        if ($session->status === 'closing') {
+                            $workerSessionId = $session->worker_session_id;
+                            if ($workerSessionId === null || ! isset($workerSessions[$workerSessionId])) {
+                                $this->markClosed($session, $session->termination_reason ?: 'reconciled_close');
+                                $summary['closedInterruptedSessions']++;
+                                return;
+                            }
+
+                            $this->terminateSession($session, $session->termination_reason ?: 'reconciled_close', true);
+                            unset($workerSessions[$workerSessionId]);
+                            $summary['closedInterruptedSessions']++;
+                            return;
+                        }
+
+                        if ($session->worker_session_id === null || ! isset($workerSessions[$session->worker_session_id])) {
+                            $this->markFailed($session, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
+                            $summary['failedMissingWorkerSessions']++;
+                            return;
+                        }
+
+                        if ($session->lease_expires_at === null) {
+                            $session->forceFill([
+                                'lease_expires_at' => $now->copy()->addSeconds($lifecycle['leaseSeconds']),
+                            ])->save();
+                            $session = $session->fresh();
+                            $summary['leasesInitialized']++;
+                        }
+
+                        $reason = $this->expirationReason($session, $now, $lifecycle);
+                        if ($reason === null) {
+                            return;
+                        }
+
+                        $workerSessionId = $session->worker_session_id;
+                        $this->terminateSession($session, $reason, false);
+                        if ($workerSessionId !== null) {
+                            unset($workerSessions[$workerSessionId]);
+                        }
+                        $summary['expiredSessions']++;
+                    });
+                } catch (RuntimeApiException $exception) {
+                    $summary['status'] = 'error';
+                    $summary['errors'][] = [
+                        'sessionId' => (string) $sessionId,
+                        'code' => $exception->errorCode,
+                    ];
+                }
+            }
+
+            $trackedWorkerIds = BrowserSession::query()
+                ->whereIn('status', self::OPEN_STATUSES)
+                ->whereNotNull('worker_session_id')
+                ->pluck('worker_session_id')
+                ->map(fn ($value) => (string) $value)
+                ->all();
+            $tracked = array_fill_keys($trackedWorkerIds, true);
+
+            $recentStartingExists = BrowserSession::query()
+                ->where('status', 'starting')
+                ->where('created_at', '>', $now->copy()->subSeconds($lifecycle['startupGraceSeconds']))
+                ->exists();
+
+            foreach (array_keys($workerSessions) as $workerSessionId) {
+                if (isset($tracked[$workerSessionId])) {
+                    continue;
+                }
+
+                if ($recentStartingExists) {
+                    $summary['orphanCleanupDeferred']++;
+                    continue;
+                }
+
+                try {
+                    $stop = $this->worker->stop($workerSessionId);
+                    $this->assertCleanStop($stop, $workerSessionId);
+                    $summary['orphanWorkerSessionsStopped']++;
+                } catch (RuntimeApiException $exception) {
+                    if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
+                        continue;
+                    }
+                    $summary['status'] = 'error';
+                    $summary['errors'][] = [
+                        'workerSessionId' => $workerSessionId,
+                        'code' => $exception->errorCode,
+                    ];
+                }
+            }
+
+            return $summary;
+        });
     }
 
     public function capacity(): array
@@ -206,7 +354,7 @@ final class SessionManager
             $workerCapacityMatches = (int) ($health['capacity']['maxSessions'] ?? 0) === $configured
                 && ($health['capacity']['configurationValid'] ?? false) === true;
             $workerHealthy = ($health['status'] ?? null) === 'ok'
-                && ($health['phase'] ?? null) === 5
+                && ($health['phase'] ?? null) === 6
                 && ($health['lifecycleOwner'] ?? null) === 'laravel'
                 && $workerCapacityMatches;
         } catch (RuntimeApiException) {
@@ -228,7 +376,7 @@ final class SessionManager
         $available = $configurationValid && $workerHealthy ? max(0, $configured - $occupancy) : 0;
 
         return [
-            'phase' => 5,
+            'phase' => 6,
             'configuredMaxSessions' => $configured,
             'effectiveMaxSessions' => $configurationValid && $workerCapacityMatches ? $configured : 0,
             'openSessions' => $open,
@@ -237,6 +385,27 @@ final class SessionManager
             'workerHealthy' => $workerHealthy,
             'configurationValid' => $configurationValid && $workerCapacityMatches,
         ];
+    }
+
+    public function lifecycleConfiguration(): array
+    {
+        $values = [
+            'leaseSeconds' => (int) config('browser.session_lease_seconds', 5400),
+            'idleTimeoutSeconds' => (int) config('browser.session_idle_timeout_seconds', 900),
+            'disconnectGraceSeconds' => (int) config('browser.session_disconnect_grace_seconds', 180),
+            'startupGraceSeconds' => (int) config('browser.session_startup_grace_seconds', 30),
+            'reaperIntervalSeconds' => (int) config('browser.session_reaper_interval_seconds', 30),
+        ];
+
+        if ($values['leaseSeconds'] < 1 || $values['leaseSeconds'] > 86400
+            || $values['idleTimeoutSeconds'] < 1 || $values['idleTimeoutSeconds'] > 86400
+            || $values['disconnectGraceSeconds'] < 1 || $values['disconnectGraceSeconds'] > 3600
+            || $values['startupGraceSeconds'] < 1 || $values['startupGraceSeconds'] > 3600
+            || $values['reaperIntervalSeconds'] < 1 || $values['reaperIntervalSeconds'] > 300) {
+            throw new RuntimeApiException('LIFECYCLE_CONFIG_INVALID', 503, 'Lifecycle timeout configuration is invalid.');
+        }
+
+        return $values;
     }
 
     private function present(BrowserSession $session, bool $reused, bool $includeViewerGrant = true): array
@@ -255,7 +424,9 @@ final class SessionManager
             'startedAt' => optional($session->started_at)->toIso8601String(),
             'lastHeartbeatAt' => optional($session->last_heartbeat_at)->toIso8601String(),
             'lastActivityAt' => optional($session->last_activity_at)->toIso8601String(),
+            'leaseExpiresAt' => optional($session->lease_expires_at)->toIso8601String(),
             'closedAt' => optional($session->closed_at)->toIso8601String(),
+            'terminationReason' => $session->termination_reason,
             'failureCode' => $session->failure_code,
             'viewerGrant' => $viewerGrant,
         ];
@@ -274,10 +445,10 @@ final class SessionManager
         return $session;
     }
 
-    private function ownedOpen(string $sessionId, string $writerId): BrowserSession
+    private function ownedActive(string $sessionId, string $writerId): BrowserSession
     {
         $session = $this->owned($sessionId, $writerId);
-        if (! in_array($session->status, self::OPEN_STATUSES, true)) {
+        if ($session->status !== 'active') {
             throw new RuntimeApiException('SESSION_NOT_ACTIVE', 409, 'The browser session is no longer active.');
         }
 
@@ -333,6 +504,120 @@ final class SessionManager
         return BrowserSession::query()->whereIn('status', self::OPEN_STATUSES)->count();
     }
 
+    private function expirationReason(BrowserSession $session, $now, array $lifecycle): ?string
+    {
+        $activityAt = $session->last_activity_at ?? $session->started_at ?? $session->created_at;
+        $heartbeatAt = $session->last_heartbeat_at ?? $session->started_at ?? $session->created_at;
+
+        $deadlines = [];
+        if ($session->lease_expires_at !== null) {
+            $deadlines['lease_expired'] = $session->lease_expires_at;
+        }
+        if ($activityAt !== null) {
+            $deadlines['idle_timeout'] = $activityAt->copy()->addSeconds($lifecycle['idleTimeoutSeconds']);
+        }
+        if ($heartbeatAt !== null) {
+            $deadlines['disconnect_timeout'] = $heartbeatAt->copy()->addSeconds($lifecycle['disconnectGraceSeconds']);
+        }
+
+        $expired = [];
+        foreach ($deadlines as $reason => $deadline) {
+            if ($deadline->lte($now)) {
+                $expired[$reason] = $deadline->getTimestamp();
+            }
+        }
+        if ($expired === []) {
+            return null;
+        }
+
+        asort($expired, SORT_NUMERIC);
+
+        return (string) array_key_first($expired);
+    }
+
+    private function terminateSession(BrowserSession $session, string $reason, bool $preserveClosingOnFailure): void
+    {
+        if (in_array($session->status, self::TERMINAL_STATUSES, true)) {
+            return;
+        }
+
+        $previousStatus = $session->status;
+        $previousReason = $session->termination_reason;
+        $workerSessionId = $session->worker_session_id;
+
+        if ($workerSessionId !== null) {
+            try {
+                $workerStatus = $this->worker->status($workerSessionId);
+                if (($workerStatus['sessionId'] ?? null) !== $workerSessionId) {
+                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
+                    throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker returned a different session; no other browser was terminated.');
+                }
+            } catch (RuntimeApiException $exception) {
+                if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
+                    $this->markClosed($session, $reason);
+                    return;
+                }
+                throw $exception;
+            }
+
+            $session->forceFill([
+                'status' => 'closing',
+                'termination_reason' => $reason,
+            ])->save();
+
+            try {
+                $stop = $this->worker->stop($workerSessionId);
+                $this->assertCleanStop($stop, $workerSessionId);
+            } catch (RuntimeApiException $exception) {
+                if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
+                    $this->markClosed($session, $reason);
+                    return;
+                }
+
+                if (in_array($exception->errorCode, ['WORKER_CLEANUP_FAILED', 'WORKER_SESSION_MISMATCH'], true)) {
+                    $this->markFailed($session, $exception->errorCode, 'The browser worker could not prove exact, complete cleanup for this session.');
+                    throw $exception;
+                }
+
+                if (! $preserveClosingOnFailure) {
+                    $session->forceFill([
+                        'status' => $previousStatus,
+                        'termination_reason' => $previousReason,
+                    ])->save();
+                }
+                throw $exception;
+            }
+        }
+
+        $this->markClosed($session, $reason);
+    }
+
+    private function assertCleanStop(array $stop, string $expectedWorkerSessionId): void
+    {
+        if (($stop['sessionId'] ?? $expectedWorkerSessionId) !== $expectedWorkerSessionId) {
+            throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker stopped an unexpected session.');
+        }
+
+        $cleanup = is_array($stop['cleanup'] ?? null) ? $stop['cleanup'] : [];
+        $clean = ($cleanup['rootExited'] ?? false) === true
+            && empty($cleanup['orphanPids'] ?? [])
+            && empty($cleanup['zombiePids'] ?? []);
+        if (! $clean) {
+            throw new RuntimeApiException('WORKER_CLEANUP_FAILED', 502, 'The browser session did not clean up completely.');
+        }
+    }
+
+    private function markClosed(BrowserSession $session, string $reason): void
+    {
+        $session->forceFill([
+            'status' => 'closed',
+            'closed_at' => now(),
+            'termination_reason' => $reason,
+            'failure_code' => null,
+            'failure_detail' => null,
+        ])->save();
+    }
+
     private function markFailed(BrowserSession $session, string $code, string $detail): void
     {
         $session->forceFill([
@@ -344,11 +629,11 @@ final class SessionManager
         ])->save();
     }
 
-    private function assertPhase5CapacityConfiguration(): int
+    private function assertCapacityConfiguration(): int
     {
         $configured = (int) config('browser.max_browser_sessions', 1);
         if ($configured < 2 || $configured > self::MAX_SUPPORTED_SESSIONS) {
-            throw new RuntimeApiException('CAPACITY_CONFIG_INVALID', 503, 'Phase 5 requires MAX_BROWSER_SESSIONS between 2 and 15.');
+            throw new RuntimeApiException('CAPACITY_CONFIG_INVALID', 503, 'MAX_BROWSER_SESSIONS must be between 2 and 15 for the multi-writer runtime.');
         }
 
         return $configured;
@@ -373,17 +658,35 @@ final class SessionManager
         return $scheme.$host.$port.$path;
     }
 
-    private function withCreationLock(callable $callback): array
+    private function withCreationLock(callable $callback): mixed
     {
-        $path = storage_path('framework/phase5-session-create.lock');
+        return $this->withFileLock(storage_path('data/phase6-session-create.lock'), $callback);
+    }
+
+    private function withSessionLock(string $sessionId, callable $callback): mixed
+    {
+        if (! preg_match('/^[0-9a-f-]{36}$/i', $sessionId)) {
+            throw new RuntimeApiException('SESSION_NOT_FOUND', 404, 'Browser session not found.');
+        }
+
+        $directory = storage_path('data/session-locks');
+        if (! is_dir($directory) && ! mkdir($directory, 0775, true) && ! is_dir($directory)) {
+            throw new RuntimeApiException('SESSION_LOCK_FAILED', 503, 'Unable to create the browser session lock directory.');
+        }
+
+        return $this->withFileLock($directory.'/'.$sessionId.'.lock', $callback);
+    }
+
+    private function withFileLock(string $path, callable $callback): mixed
+    {
         $handle = fopen($path, 'c');
         if ($handle === false) {
-            throw new RuntimeApiException('SESSION_LOCK_FAILED', 503, 'Unable to acquire the browser session creation lock.');
+            throw new RuntimeApiException('SESSION_LOCK_FAILED', 503, 'Unable to acquire the browser session lifecycle lock.');
         }
 
         try {
             if (! flock($handle, LOCK_EX)) {
-                throw new RuntimeApiException('SESSION_LOCK_FAILED', 503, 'Unable to acquire the browser session creation lock.');
+                throw new RuntimeApiException('SESSION_LOCK_FAILED', 503, 'Unable to acquire the browser session lifecycle lock.');
             }
 
             return $callback();
