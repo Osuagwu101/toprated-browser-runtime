@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase6-lifecycle-management
+      - phase7-tool-profiles
       - main
   workflow_dispatch:
 
