@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 
-const DEFAULT_URL = 'data:text/html,%3Ctitle%3EPhase%202%3C/title%3E%3Ch1%3ESafe%20browser%20test%3C/h1%3E';
+const DEFAULT_URL = 'data:text/html,%3Ctitle%3EPhase%203%3C/title%3E%3Ch1%3ESafe%20browser%20viewer%20test%3C/h1%3E';
+export const VIEWPORT = Object.freeze({ width: 1280, height: 720 });
 
 export function validateNavigationUrl(value) {
   const raw = String(value || DEFAULT_URL).trim();
@@ -46,7 +47,7 @@ export class BrowserController {
     if (!this.current) {
       return {
         active: false,
-        phase: 2,
+        phase: 3,
         provider: 'self_hosted',
         lastDisconnect: this.lastDisconnect,
         chromiumPids: chromiumPids(),
@@ -54,7 +55,7 @@ export class BrowserController {
     }
     return {
       active: true,
-      phase: 2,
+      phase: 3,
       provider: 'self_hosted',
       sessionId: this.current.sessionId,
       url: this.current.page.url(),
@@ -76,9 +77,15 @@ export class BrowserController {
       browser = await chromium.launch({
         executablePath: this.executablePath,
         headless: true,
-        args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+        args: [
+          '--no-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-default-browser-check',
+        ],
       });
-      const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+      const context = await browser.newContext({ viewport: VIEWPORT });
       const page = await context.newPage();
       const sessionId = randomUUID();
 
@@ -92,7 +99,7 @@ export class BrowserController {
         }
       });
 
-      await page.goto(safeUrl, { waitUntil: 'load', timeout: 10000 });
+      await page.goto(safeUrl, { waitUntil: 'load', timeout: 15000 });
       return await this.snapshot();
     } catch (error) {
       if (browser) {
@@ -110,12 +117,13 @@ export class BrowserController {
     const { page, sessionId } = this.current;
     return {
       active: true,
-      phase: 2,
+      phase: 3,
       provider: 'self_hosted',
       sessionId,
       url: page.url(),
       title: await page.title(),
       readyState: await page.evaluate(() => document.readyState),
+      scrollY: await page.evaluate(() => Math.round(window.scrollY)),
       chromiumPids: chromiumPids(),
     };
   }
@@ -125,7 +133,7 @@ export class BrowserController {
       throw Object.assign(new Error('browser_not_active'), { statusCode: 409 });
     }
     const safeUrl = validateNavigationUrl(url);
-    await this.current.page.goto(safeUrl, { waitUntil: 'load', timeout: 10000 });
+    await this.current.page.goto(safeUrl, { waitUntil: 'load', timeout: 15000 });
     return await this.snapshot();
   }
 
@@ -146,7 +154,7 @@ export class BrowserController {
 
     return {
       active: false,
-      phase: 2,
+      phase: 3,
       provider: 'self_hosted',
       sessionId: session?.sessionId || null,
       cleanup: {
