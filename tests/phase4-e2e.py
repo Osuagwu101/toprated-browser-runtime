@@ -35,11 +35,9 @@ def signed(method, path, writer, obj=None, nonce=None, timestamp=None, signature
     req = request.Request(API + path, data=(body if obj is not None else None), headers=headers, method=method.upper())
     try:
         with request.urlopen(req, timeout=20) as response:
-            raw = response.read()
-            return response.status, json.loads(raw or b'{}')
+            return response.status, json.loads(response.read() or b'{}')
     except error.HTTPError as exc:
-        raw = exc.read()
-        return exc.code, json.loads(raw or b'{}')
+        return exc.code, json.loads(exc.read() or b'{}')
 
 
 def assert_http_error(req, expected):
@@ -47,49 +45,47 @@ def assert_http_error(req, expected):
         request.urlopen(req, timeout=10)
     except error.HTTPError as exc:
         assert exc.code == expected, (exc.code, expected)
+        exc.read()
         return
     raise AssertionError(f'expected HTTP {expected}')
 
 
-# Worker lifecycle endpoints must not bypass Laravel.
+# Phase 4 ownership boundary remains enforced after Phase 5 adds multi-session support.
 assert_http_error(request.Request(WORKER + '/browser/status'), 401)
-
-# Runtime control-plane routes require signed service authentication.
 assert_http_error(request.Request(API + '/api/capacity'), 401)
 
 code, capacity = signed('GET', '/api/capacity', 'writer-a')
 assert code == 200, (code, capacity)
-assert capacity['phase'] == 4
-assert capacity['configuredMaxSessions'] == 1
-assert capacity['effectiveMaxSessions'] == 1
-assert capacity['openSessions'] == 0
-assert capacity['availableSlots'] == 1
-assert capacity['workerHealthy'] is True
-assert capacity['configurationValid'] is True
+assert capacity['phase'] == 5, capacity
+assert capacity['configuredMaxSessions'] == 3, capacity
+assert capacity['effectiveMaxSessions'] == 3, capacity
+assert capacity['openSessions'] == 0, capacity
+assert capacity['availableSlots'] == 3, capacity
+assert capacity['workerHealthy'] is True, capacity
+assert capacity['configurationValid'] is True, capacity
 
 launch = 'data:text/html,%3Ctitle%3EPhase%204%20Owned%3C/title%3E%3Ch1%3EOwned%3C/h1%3E'
-launch_body = {'writer_id': 'writer-a', 'tool_slug': 'generic-phase4', 'launch_url': launch}
+launch_body = {'writer_id': 'writer-a', 'tool_slug': 'generic-phase4-regression', 'launch_url': launch}
 code, created = signed('POST', '/api/sessions', 'writer-a', launch_body)
 assert code == 201, (code, created)
-assert created['status'] == 'active'
-assert created['writerId'] == 'writer-a'
-assert created['toolSlug'] == 'generic-phase4'
-assert created['reused'] is False
+assert created['status'] == 'active', created
+assert created['writerId'] == 'writer-a', created
+assert created['toolSlug'] == 'generic-phase4-regression', created
+assert created['reused'] is False, created
 sid = created['sessionId']
 grant = created['viewerGrant']
-assert grant and grant['rawCdpExposed'] is False
-assert grant['tokenTransport'] == 'url-fragment-to-bearer'
+assert grant and grant['rawCdpExposed'] is False, grant
+assert grant['tokenTransport'] == 'url-fragment-to-bearer', grant
 
-# Verify Laravel-issued viewer grant signature and writer binding.
 parts = parse.urlsplit(grant['url'])
 token = parse.unquote(parts.fragment)
 encoded, supplied_sig = token.split('.', 1)
 payload = json.loads(base64.urlsafe_b64decode(encoded + '=' * ((4 - len(encoded) % 4) % 4)))
 expected_sig = base64.urlsafe_b64encode(hmac.new(VIEWER_SECRET, encoded.encode(), hashlib.sha256).digest()).decode().rstrip('=')
 assert hmac.compare_digest(supplied_sig, expected_sig)
-assert payload['wid'] == 'writer-a'
-assert payload['sid'] in grant['url']
-assert payload['exp'] > payload['iat']
+assert payload['wid'] == 'writer-a', payload
+assert payload['sid'] in grant['url'], grant
+assert payload['exp'] > payload['iat'], payload
 
 viewer_url = parse.urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ''))
 frame_req = request.Request(viewer_url + '/frame', headers={'authorization': 'Bearer ' + token})
@@ -99,42 +95,34 @@ with request.urlopen(frame_req, timeout=20) as response:
     assert frame[:3] == b'\xff\xd8\xff'
     assert len(frame) > 2000
 
-# Same writer/tool gets the same live browser with a fresh grant.
+# Same writer/tool reuses the same live browser with a fresh grant.
 code, reused = signed('POST', '/api/sessions', 'writer-a', launch_body)
 assert code == 200, (code, reused)
-assert reused['reused'] is True
-assert reused['sessionId'] == sid
-assert reused['viewerGrant']['url'] != grant['url']
+assert reused['reused'] is True, reused
+assert reused['sessionId'] == sid, reused
+assert reused['viewerGrant']['url'] != grant['url'], reused
 
-# A second writer cannot take the Phase 4 single slot.
-code, capacity = signed('GET', '/api/capacity', 'writer-a')
-assert code == 200 and capacity['openSessions'] == 1 and capacity['availableSlots'] == 0, capacity
-code, full = signed('POST', '/api/sessions', 'writer-b', {
-    'writer_id': 'writer-b', 'tool_slug': 'generic-phase4', 'launch_url': launch,
-})
-assert code == 429 and full['code'] == 'CAPACITY_FULL', (code, full)
-
-# Writer ownership applies to status, viewer grant renewal, and close.
+# Cross-writer access to the owned session remains forbidden.
 for method, path, body in [
     ('GET', f'/api/sessions/{sid}', None),
+    ('POST', f'/api/sessions/{sid}/heartbeat', {}),
+    ('POST', f'/api/sessions/{sid}/activity', {}),
     ('POST', f'/api/sessions/{sid}/viewer-grant', {}),
     ('DELETE', f'/api/sessions/{sid}', None),
 ]:
     code, forbidden = signed(method, path, 'writer-b', body)
-    assert code == 403 and forbidden['code'] == 'SESSION_FORBIDDEN', (code, forbidden)
+    assert code == 403 and forbidden['code'] == 'SESSION_FORBIDDEN', (method, path, code, forbidden)
 
 code, heartbeat = signed('POST', f'/api/sessions/{sid}/heartbeat', 'writer-a', {})
-assert code == 200 and heartbeat['lastHeartbeatAt']
+assert code == 200 and heartbeat['lastHeartbeatAt'], (code, heartbeat)
 code, activity = signed('POST', f'/api/sessions/{sid}/activity', 'writer-a', {})
-assert code == 200 and activity['lastActivityAt']
+assert code == 200 and activity['lastActivityAt'], (code, activity)
 code, fresh_grant = signed('POST', f'/api/sessions/{sid}/viewer-grant', 'writer-a', {})
-assert code == 200 and fresh_grant['viewerGrant']['url'] != grant['url']
+assert code == 200 and fresh_grant['viewerGrant']['url'] != grant['url'], (code, fresh_grant)
 
-# Writer identity is signed, so header substitution invalidates the request.
+# Writer identity is signed and nonces are single-use.
 code, tampered = signed('GET', '/api/capacity', 'writer-b', signature_writer='writer-a')
 assert code == 401 and tampered['code'] == 'AUTH_INVALID_SIGNATURE', (code, tampered)
-
-# A valid nonce is single-use.
 replay_nonce = secrets.token_urlsafe(18)
 replay_ts = int(time.time())
 code, first = signed('GET', '/api/capacity', 'writer-a', nonce=replay_nonce, timestamp=replay_ts)
@@ -142,13 +130,12 @@ assert code == 200, (code, first)
 code, replay = signed('GET', '/api/capacity', 'writer-a', nonce=replay_nonce, timestamp=replay_ts)
 assert code == 409 and replay['code'] == 'AUTH_REPLAY', (code, replay)
 
-# Close and verify viewer invalidation plus capacity release.
 code, closed = signed('DELETE', f'/api/sessions/{sid}', 'writer-a')
 assert code == 200 and closed['status'] == 'closed', (code, closed)
-assert closed['closedAt']
+assert closed['closedAt'], closed
 assert_http_error(frame_req, 410)
 code, capacity = signed('GET', '/api/capacity', 'writer-a')
-assert code == 200 and capacity['openSessions'] == 0 and capacity['availableSlots'] == 1, capacity
+assert code == 200 and capacity['openSessions'] == 0 and capacity['availableSlots'] == 3, capacity
 
 open('/tmp/phase4-session-id', 'w').write(sid)
-print(json.dumps({'result': 'PASS', 'phase': 4, 'sessionId': sid}))
+print(json.dumps({'result': 'PASS', 'phase4OwnershipRegression': True, 'currentPhase': 5, 'sessionId': sid}))

@@ -5,6 +5,7 @@ on:
     branches:
       - phase4-laravel-session-api
       - phase4-ci-baseline-fix
+      - phase5-session-isolation
       - main
   workflow_dispatch:
 
@@ -19,7 +20,7 @@ env:
   WORKER_CONTROL_SECRET: phase4-ci-worker-control-secret-not-for-production-0123456789abcdef
   SERVICE_AUTH_MAX_SKEW_SECONDS: 300
   VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
-  MAX_BROWSER_SESSIONS: 1
+  MAX_BROWSER_SESSIONS: 3
 
 jobs:
   phase4-session-ownership:
@@ -29,12 +30,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
       - name: Static and unit gates
         run: |
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
-          find api -name '*.php' -print0 | xargs -0 -n1 php -l
-          python3 -m json.tool api/composer.json >/dev/null
           grep -F "Route::post('/sessions'" api/routes/api.php
           grep -F "Route::post('/sessions/{session}/heartbeat'" api/routes/api.php
           grep -F "Route::post('/sessions/{session}/activity'" api/routes/api.php
@@ -48,11 +50,11 @@ jobs:
           grep -F "grantIssuer: 'laravel'" browser-worker/src/health.mjs
           grep -F "assertConfigured" api/app/Http/Controllers/SessionController.php
           if grep -F "issueViewerGrant" browser-worker/src/server.mjs; then
-            echo 'Browser worker must not issue production viewer grants in Phase 4.' >&2
+            echo 'Browser worker must not issue production viewer grants.' >&2
             exit 1
           fi
           if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
-            echo 'Phase 4 production runtime contains tool-specific Phrasly logic.' >&2
+            echo 'Production runtime contains tool-specific Phrasly logic.' >&2
             exit 1
           fi
           if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
@@ -60,13 +62,13 @@ jobs:
             exit 1
           fi
 
-      - name: Build Phase 4 containers
+      - name: Build current containers
         run: docker compose build
 
-      - name: Boot Phase 4 runtime
+      - name: Boot current runtime
         run: docker compose up -d
 
-      - name: Wait for Phase 4 health
+      - name: Wait for current health
         run: |
           set -euo pipefail
           for i in $(seq 1 40); do
@@ -83,16 +85,18 @@ jobs:
           h=json.load(open('/tmp/phase4-health.json'))
           w=json.load(open('/tmp/phase4-worker-health.json'))
           assert h['status']=='ok', h
-          assert h['phase']==4, h
+          assert h['phase']==5, h
           assert h['session_owner']=='laravel', h
           assert h['viewer_grant_issuer']=='laravel', h
           assert h['service_auth']=='hmac-sha256-timestamp-nonce-v1', h
           assert h['database']=='ok', h
           assert h['browser_worker']=='ok', h
           assert h['configuration']=='ok', h
-          assert w['phase']==4, w
+          assert h['max_browser_sessions']==3, h
+          assert w['phase']==5, w
           assert w['lifecycleOwner']=='laravel', w
           assert w['viewer']['grantIssuer']=='laravel', w
+          assert w['capacity']['maxSessions']==3, w
           PY
 
       - name: Validate viewer configuration fail-fast guard
@@ -115,7 +119,7 @@ jobs:
       - name: Preserve Phase 1-3 browser and viewer regression
         run: node browser-worker/test/standalone-migration.e2e.mjs
 
-      - name: Phase 4 signed API ownership and lifecycle regression
+      - name: Preserve Phase 4 signed API ownership and lifecycle regression
         run: python3 tests/phase4-e2e.py
 
       - name: Verify sensitive launch payload is not persisted

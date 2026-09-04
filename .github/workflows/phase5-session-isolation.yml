@@ -1,0 +1,143 @@
+name: Phase 5 Session Isolation
+
+on:
+  push:
+    branches:
+      - phase5-session-isolation
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase5-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase5-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase5-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+
+jobs:
+  phase5-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Static and unit gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          grep -F "this.sessions = new Map()" browser-worker/src/browser-session.mjs
+          grep -F "'/browser/sessions'" browser-worker/src/server.mjs
+          grep -F "worker_session_id" api/app/Services/SessionManager.php
+          grep -F "MAX_BROWSER_SESSIONS" docker-compose.yml
+          grep -F "rawCdpExposed: false" browser-worker/src/health.mjs
+          grep -F "grantIssuer: 'laravel'" browser-worker/src/health.mjs
+          if grep -F "issueViewerGrant" browser-worker/src/server.mjs; then
+            echo 'Browser worker must not issue viewer grants.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
+            echo 'Phase 5 core runtime contains tool-specific Phrasly logic.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+
+      - name: Build Phase 5 containers
+        run: docker compose build
+
+      - name: Boot Phase 5 runtime
+        run: docker compose up -d
+
+      - name: Wait for Phase 5 health and capacity agreement
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase5-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase5-worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/phase5-health.json
+          cat /tmp/phase5-worker-health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/phase5-health.json'))
+          w=json.load(open('/tmp/phase5-worker-health.json'))
+          assert h['status']=='ok', h
+          assert h['phase']==5, h
+          assert h['session_owner']=='laravel', h
+          assert h['viewer_grant_issuer']=='laravel', h
+          assert h['max_browser_sessions']==3, h
+          assert w['status']=='ok', w
+          assert w['phase']==5, w
+          assert w['lifecycleOwner']=='laravel', w
+          assert w['viewer']['rawCdpExposed'] is False, w
+          assert w['capacity']['maxSessions']==3, w
+          assert w['capacity']['configurationValid'] is True, w
+          PY
+
+      - name: Preserve Phase 1-3 regression
+        run: node browser-worker/test/standalone-migration.e2e.mjs
+
+      - name: Preserve Phase 4 Laravel ownership regression
+        run: python3 tests/phase4-e2e.py
+
+      - name: Start same-origin isolation fixture inside worker namespace
+        run: |
+          set -euo pipefail
+          docker compose exec -d browser-worker node test/isolation-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker curl --fail --silent http://127.0.0.1:19090/health >/dev/null; then break; fi
+            sleep 1
+          done
+          docker compose exec -T browser-worker curl --fail --silent http://127.0.0.1:19090/health
+
+      - name: Phase 5 multi-writer isolation and crash regression
+        run: python3 tests/phase5-e2e.py
+
+      - name: Verify no browser profile or Chromium residue
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
+          console.log('phase5_cleanup_scan=clean');
+          NODE
+
+      - name: Verify Phase 5 records close cleanly
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "open_sessions=0\n";
+          '
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
