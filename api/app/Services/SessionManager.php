@@ -10,6 +10,7 @@ final class SessionManager
 {
     private const OPEN_STATUSES = ['starting', 'active', 'closing'];
     private const TERMINAL_STATUSES = ['closed', 'failed'];
+    private const MAX_SUPPORTED_SESSIONS = 15;
 
     public function __construct(
         private readonly BrowserWorkerClient $worker,
@@ -20,7 +21,8 @@ final class SessionManager
     public function create(string $writerId, string $toolSlug, string $launchUrl): array
     {
         return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl): array {
-            $this->assertPhase4CapacityConfiguration();
+            $maxSessions = $this->assertPhase5CapacityConfiguration();
+            $workerSessions = $this->workerSessionIndex();
 
             $existing = BrowserSession::query()
                 ->where('writer_id', $writerId)
@@ -33,35 +35,16 @@ final class SessionManager
                     throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
                 }
 
-                $workerStatus = $this->worker->status();
-                if (($workerStatus['active'] ?? false) === true && ($workerStatus['sessionId'] ?? null) === $existing->worker_session_id) {
+                if ($existing->worker_session_id !== null && isset($workerSessions[$existing->worker_session_id])) {
                     return $this->present($existing, true);
                 }
 
                 $this->markFailed($existing, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
             }
 
-            $workerStatus = $this->worker->status();
-            if (($workerStatus['active'] ?? false) === true) {
-                $tracked = BrowserSession::query()
-                    ->where('worker_session_id', (string) ($workerStatus['sessionId'] ?? ''))
-                    ->whereIn('status', self::OPEN_STATUSES)
-                    ->first();
-
-                if ($tracked === null) {
-                    throw new RuntimeApiException('WORKER_BUSY_UNTRACKED', 503, 'The browser worker is occupied by an untracked session.');
-                }
-                if ($tracked->writer_id !== $writerId) {
-                    throw new RuntimeApiException('CAPACITY_FULL', 429, 'Self Hosted browser capacity is temporarily full.');
-                }
-                if ($tracked->tool_slug !== $toolSlug) {
-                    throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
-                }
-
-                return $this->present($tracked, true);
-            }
-
-            if ($this->openSessionCount() >= 1) {
+            $open = $this->openSessionCount();
+            $occupancy = $open + $this->untrackedWorkerSessionCount($workerSessions);
+            if ($occupancy >= $maxSessions) {
                 throw new RuntimeApiException('CAPACITY_FULL', 429, 'Self Hosted browser capacity is temporarily full.');
             }
 
@@ -87,9 +70,20 @@ final class SessionManager
                 throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker did not create a valid session.');
             }
 
+            $workerSessionId = $workerStatus['sessionId'];
+            $alreadyTracked = BrowserSession::query()
+                ->where('worker_session_id', $workerSessionId)
+                ->where('id', '!=', $session->id)
+                ->exists();
+            if ($alreadyTracked) {
+                // Never terminate a worker session whose ownership is ambiguous. Phase 6 will reconcile it.
+                $this->markFailed($session, 'WORKER_SESSION_COLLISION', 'The worker returned a browser session identifier already tracked by another record.');
+                throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker returned a duplicate session identifier.');
+            }
+
             $session->forceFill([
                 'status' => 'active',
-                'worker_session_id' => $workerStatus['sessionId'],
+                'worker_session_id' => $workerSessionId,
                 'started_at' => now(),
                 'failure_code' => null,
                 'failure_detail' => null,
@@ -102,14 +96,20 @@ final class SessionManager
     public function status(string $sessionId, string $writerId): array
     {
         $session = $this->owned($sessionId, $writerId);
-        if ($session->status === 'active') {
-            $workerStatus = $this->worker->status();
-            if (($workerStatus['active'] ?? false) !== true) {
-                $this->markFailed($session, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
-                $session = $session->fresh();
-            } elseif (($workerStatus['sessionId'] ?? null) !== $session->worker_session_id) {
-                $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker is running a different browser session.');
-                $session = $session->fresh();
+        if ($session->status === 'active' && $session->worker_session_id !== null) {
+            try {
+                $workerStatus = $this->worker->status($session->worker_session_id);
+                if (($workerStatus['active'] ?? false) !== true || ($workerStatus['sessionId'] ?? null) !== $session->worker_session_id) {
+                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
+                    $session = $session->fresh();
+                }
+            } catch (RuntimeApiException $exception) {
+                if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
+                    $this->markFailed($session, 'WORKER_SESSION_MISSING', 'The tracked browser session is no longer active in the worker.');
+                    $session = $session->fresh();
+                } else {
+                    throw $exception;
+                }
             }
         }
 
@@ -152,23 +152,35 @@ final class SessionManager
             return $this->present($session, false, false);
         }
 
+        $workerSessionId = $session->worker_session_id;
         $session->forceFill(['status' => 'closing'])->save();
-        $workerStatus = $this->worker->status();
 
-        if (($workerStatus['active'] ?? false) === true) {
-            if (($workerStatus['sessionId'] ?? null) !== $session->worker_session_id) {
-                $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker is running a different browser session.');
-                throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker is running a different session; it was not terminated.');
-            }
+        if ($workerSessionId !== null) {
+            try {
+                $workerStatus = $this->worker->status($workerSessionId);
+                if (($workerStatus['sessionId'] ?? null) !== $workerSessionId) {
+                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
+                    throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker returned a different session; no other browser was terminated.');
+                }
 
-            $stop = $this->worker->stop();
-            $cleanup = is_array($stop['cleanup'] ?? null) ? $stop['cleanup'] : [];
-            $clean = ($cleanup['rootExited'] ?? false) === true
-                && empty($cleanup['orphanPids'] ?? [])
-                && empty($cleanup['zombiePids'] ?? []);
-            if (! $clean) {
-                $this->markFailed($session, 'WORKER_CLEANUP_FAILED', 'The browser worker reported incomplete process cleanup.');
-                throw new RuntimeApiException('WORKER_CLEANUP_FAILED', 502, 'The browser session did not clean up completely.');
+                $stop = $this->worker->stop($workerSessionId);
+                if (($stop['sessionId'] ?? $workerSessionId) !== $workerSessionId) {
+                    $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker stopped an unexpected browser session identity.');
+                    throw new RuntimeApiException('WORKER_SESSION_MISMATCH', 409, 'The browser worker stopped an unexpected session.');
+                }
+                $cleanup = is_array($stop['cleanup'] ?? null) ? $stop['cleanup'] : [];
+                $clean = ($cleanup['rootExited'] ?? false) === true
+                    && empty($cleanup['orphanPids'] ?? [])
+                    && empty($cleanup['zombiePids'] ?? []);
+                if (! $clean) {
+                    $this->markFailed($session, 'WORKER_CLEANUP_FAILED', 'The browser worker reported incomplete process cleanup.');
+                    throw new RuntimeApiException('WORKER_CLEANUP_FAILED', 502, 'The browser session did not clean up completely.');
+                }
+            } catch (RuntimeApiException $exception) {
+                if (! in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
+                    throw $exception;
+                }
+                // The exact worker session is already gone. Closing the record is safe and does not affect other sessions.
             }
         }
 
@@ -184,31 +196,46 @@ final class SessionManager
     public function capacity(): array
     {
         $configured = (int) config('browser.max_browser_sessions', 1);
+        $configurationValid = $configured >= 2 && $configured <= self::MAX_SUPPORTED_SESSIONS;
         $workerHealthy = false;
-        $workerActive = false;
+        $workerActive = 0;
+        $workerCapacityMatches = false;
 
         try {
             $health = $this->worker->health();
-            $workerHealthy = ($health['status'] ?? null) === 'ok';
-            $status = $this->worker->status();
-            $workerActive = ($status['active'] ?? false) === true;
+            $workerCapacityMatches = (int) ($health['capacity']['maxSessions'] ?? 0) === $configured
+                && ($health['capacity']['configurationValid'] ?? false) === true;
+            $workerHealthy = ($health['status'] ?? null) === 'ok'
+                && ($health['phase'] ?? null) === 5
+                && ($health['lifecycleOwner'] ?? null) === 'laravel'
+                && $workerCapacityMatches;
         } catch (RuntimeApiException) {
             $workerHealthy = false;
         }
 
         $open = $this->openSessionCount();
-        $configurationValid = $configured === 1;
-        $available = $configurationValid && $workerHealthy && ! $workerActive && $open === 0 ? 1 : 0;
+        $workerSessions = [];
+        if ($workerHealthy) {
+            try {
+                $workerSessions = $this->workerSessionIndex();
+                $workerActive = count($workerSessions);
+            } catch (RuntimeApiException) {
+                $workerHealthy = false;
+                $workerActive = 0;
+            }
+        }
+        $occupancy = $open + ($workerHealthy ? $this->untrackedWorkerSessionCount($workerSessions) : 0);
+        $available = $configurationValid && $workerHealthy ? max(0, $configured - $occupancy) : 0;
 
         return [
-            'phase' => 4,
+            'phase' => 5,
             'configuredMaxSessions' => $configured,
-            'effectiveMaxSessions' => 1,
+            'effectiveMaxSessions' => $configurationValid && $workerCapacityMatches ? $configured : 0,
             'openSessions' => $open,
+            'workerActiveSessions' => $workerActive,
             'availableSlots' => $available,
             'workerHealthy' => $workerHealthy,
-            'workerActive' => $workerActive,
-            'configurationValid' => $configurationValid,
+            'configurationValid' => $configurationValid && $workerCapacityMatches,
         ];
     }
 
@@ -257,6 +284,50 @@ final class SessionManager
         return $session;
     }
 
+    private function workerSessionIndex(): array
+    {
+        $payload = $this->worker->sessions();
+        if (! is_array($payload['sessions'] ?? null)) {
+            throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker did not return a session list.');
+        }
+
+        $index = [];
+        foreach ($payload['sessions'] as $workerSession) {
+            if (! is_array($workerSession) || ($workerSession['active'] ?? false) !== true || ! is_string($workerSession['sessionId'] ?? null) || $workerSession['sessionId'] === '') {
+                throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker returned an invalid session entry.');
+            }
+            if (isset($index[$workerSession['sessionId']])) {
+                throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker returned a duplicate session entry.');
+            }
+            $index[$workerSession['sessionId']] = $workerSession;
+        }
+
+        return $index;
+    }
+
+    private function untrackedWorkerSessionCount(array $workerSessions): int
+    {
+        if ($workerSessions === []) {
+            return 0;
+        }
+
+        $trackedIds = BrowserSession::query()
+            ->whereIn('status', self::OPEN_STATUSES)
+            ->whereNotNull('worker_session_id')
+            ->pluck('worker_session_id')
+            ->all();
+        $tracked = array_fill_keys(array_map('strval', $trackedIds), true);
+
+        $untracked = 0;
+        foreach (array_keys($workerSessions) as $workerSessionId) {
+            if (! isset($tracked[$workerSessionId])) {
+                $untracked++;
+            }
+        }
+
+        return $untracked;
+    }
+
     private function openSessionCount(): int
     {
         return BrowserSession::query()->whereIn('status', self::OPEN_STATUSES)->count();
@@ -273,11 +344,14 @@ final class SessionManager
         ])->save();
     }
 
-    private function assertPhase4CapacityConfiguration(): void
+    private function assertPhase5CapacityConfiguration(): int
     {
-        if ((int) config('browser.max_browser_sessions', 1) !== 1) {
-            throw new RuntimeApiException('CAPACITY_CONFIG_INVALID', 503, 'Phase 4 requires MAX_BROWSER_SESSIONS=1 until Phase 5 multi-session isolation is implemented.');
+        $configured = (int) config('browser.max_browser_sessions', 1);
+        if ($configured < 2 || $configured > self::MAX_SUPPORTED_SESSIONS) {
+            throw new RuntimeApiException('CAPACITY_CONFIG_INVALID', 503, 'Phase 5 requires MAX_BROWSER_SESSIONS between 2 and 15.');
         }
+
+        return $configured;
     }
 
     private function safeLaunchUrlForRecord(string $launchUrl): string
@@ -301,7 +375,7 @@ final class SessionManager
 
     private function withCreationLock(callable $callback): array
     {
-        $path = storage_path('framework/phase4-session-create.lock');
+        $path = storage_path('framework/phase5-session-create.lock');
         $handle = fopen($path, 'c');
         if ($handle === false) {
             throw new RuntimeApiException('SESSION_LOCK_FAILED', 503, 'Unable to acquire the browser session creation lock.');
