@@ -31,7 +31,7 @@ jobs:
         run: docker compose build
 
       - name: Run worker unit tests in runtime image
-        run: docker compose run --rm --no-deps browser-worker node --test test/*.test.js
+        run: docker compose run --rm --no-deps browser-worker sh -lc 'node --test test/*.test.js'
 
       - name: Boot isolated runtime
         run: docker compose up -d
