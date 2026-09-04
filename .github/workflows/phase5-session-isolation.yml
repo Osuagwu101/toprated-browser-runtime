@@ -8,6 +8,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: browser-runtime-container-ci-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -55,8 +59,24 @@ jobs:
             exit 1
           fi
 
-      - name: Build current containers
-        run: docker compose build
+      - name: Build current containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then
+              echo 'compose_build=pass'
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo 'compose_build=fail attempts=3' >&2
+              exit 1
+            fi
+            echo "compose_build_retry_in_seconds=${delay}" >&2
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
 
       - name: Boot inherited Phase 5 runtime without autonomous reaper
         run: docker compose up -d api browser-worker
