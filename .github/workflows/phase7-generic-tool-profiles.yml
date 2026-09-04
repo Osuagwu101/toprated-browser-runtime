@@ -94,6 +94,9 @@ jobs:
           w=json.load(open('/tmp/phase7-worker-health.json'))
           assert h['status']=='ok', h
           assert h['browser_core']=='generic', h
+          assert h['tool_profiles']['configurationValid'] is True, h
+          assert h['tool_profiles']['configuredCount'] >= 2, h
+          assert h['tool_profiles']['enabledCount'] >= 1, h
           assert w['status']=='ok', w
           assert w['browserCore']=='generic', w
           assert w['viewer']['rawCdpExposed'] is False, w
