@@ -6,6 +6,7 @@ on:
       - phase4-laravel-session-api
       - phase4-ci-baseline-fix
       - phase5-session-isolation
+      - phase6-lifecycle-management
       - main
   workflow_dispatch:
 
@@ -65,8 +66,8 @@ jobs:
       - name: Build current containers
         run: docker compose build
 
-      - name: Boot current runtime
-        run: docker compose up -d
+      - name: Boot inherited Phase 4 runtime without autonomous reaper
+        run: docker compose up -d api browser-worker
 
       - name: Wait for current health
         run: |
@@ -85,7 +86,7 @@ jobs:
           h=json.load(open('/tmp/phase4-health.json'))
           w=json.load(open('/tmp/phase4-worker-health.json'))
           assert h['status']=='ok', h
-          assert h['phase']==5, h
+          assert h['phase']==6, h
           assert h['session_owner']=='laravel', h
           assert h['viewer_grant_issuer']=='laravel', h
           assert h['service_auth']=='hmac-sha256-timestamp-nonce-v1', h
@@ -93,7 +94,7 @@ jobs:
           assert h['browser_worker']=='ok', h
           assert h['configuration']=='ok', h
           assert h['max_browser_sessions']==3, h
-          assert w['phase']==5, w
+          assert w['phase']==6, w
           assert w['lifecycleOwner']=='laravel', w
           assert w['viewer']['grantIssuer']=='laravel', w
           assert w['capacity']['maxSessions']==3, w
