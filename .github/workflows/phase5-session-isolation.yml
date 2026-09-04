@@ -28,12 +28,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Static, syntax, and unit gates
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Static and unit gates
         run: |
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
-          find api -name '*.php' -print0 | xargs -0 -n1 php -l
-          python3 -m py_compile tests/phase4-e2e.py tests/phase5-e2e.py
           grep -F "this.sessions = new Map()" browser-worker/src/browser-session.mjs
           grep -F "'/browser/sessions'" browser-worker/src/server.mjs
           grep -F "worker_session_id" api/app/Services/SessionManager.php
