@@ -27,11 +27,14 @@ final class SessionController
         if (strlen($writerId) > 191 || strlen($toolSlug) < 1 || strlen($toolSlug) > 191 || ! preg_match('/^[A-Za-z0-9._-]+$/', $toolSlug)) {
             throw new RuntimeApiException('INVALID_LAUNCH_REQUEST', 422, 'Writer and tool identifiers must be valid bounded identifiers.');
         }
-        if (array_key_exists('launch_url', $request->all())) {
-            throw new RuntimeApiException('LAUNCH_URL_OVERRIDE_FORBIDDEN', 422, 'Launch URL is controlled by the configured tool profile.');
-        }
 
         $profile = $toolProfiles->resolve($toolSlug, $writerId);
+        if (array_key_exists('launch_url', $request->all())) {
+            $suppliedLaunchUrl = trim((string) $request->input('launch_url', ''));
+            if (! hash_equals($profile['launchUrl'], $suppliedLaunchUrl)) {
+                throw new RuntimeApiException('LAUNCH_URL_OVERRIDE_FORBIDDEN', 422, 'Launch URL is controlled by the configured tool profile.');
+            }
+        }
 
         // Fail before Chromium is created if the viewer cannot issue a usable grant.
         $viewerGrants->assertConfigured();
