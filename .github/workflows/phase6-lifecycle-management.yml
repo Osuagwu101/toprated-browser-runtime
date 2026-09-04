@@ -1,0 +1,149 @@
+name: Phase 6 Lifecycle Management
+
+on:
+  push:
+    branches:
+      - phase6-lifecycle-management
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase6-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase6-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase6-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 30
+  SESSION_IDLE_TIMEOUT_SECONDS: 20
+  SESSION_DISCONNECT_GRACE_SECONDS: 12
+  SESSION_STARTUP_GRACE_SECONDS: 4
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+
+jobs:
+  phase6-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Static and unit gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          grep -F "lease_expires_at" api/app/Services/SessionManager.php
+          grep -F "browser:sessions:reap" api/routes/console.php
+          grep -F "SESSION_LEASE_SECONDS" docker-compose.yml
+          grep -F "SESSION_IDLE_TIMEOUT_SECONDS" docker-compose.yml
+          grep -F "SESSION_DISCONNECT_GRACE_SECONDS" docker-compose.yml
+          grep -F "lifecycle-reaper" docker-compose.yml
+          grep -F "crashWatchdog: 'process-exit-cleanup'" browser-worker/src/health.mjs
+          grep -F "process-exit-cleanup" browser-worker/src/server.mjs
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
+            echo 'Phase 6 core runtime contains tool-specific Phrasly logic.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+
+      - name: Build Phase 6 containers
+        run: docker compose build
+
+      - name: Boot full Phase 6 runtime with autonomous reaper
+        run: docker compose up -d
+
+      - name: Wait for Phase 6 health and reaper
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase6-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase6-worker-health.json \
+              && test -n "$(docker compose ps -q lifecycle-reaper)"; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/phase6-health.json
+          cat /tmp/phase6-worker-health.json
+          docker compose ps
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/phase6-health.json'))
+          w=json.load(open('/tmp/phase6-worker-health.json'))
+          assert h['status']=='ok', h
+          assert h['phase']==6, h
+          assert h['session_owner']=='laravel', h
+          assert h['lifecycle']=={
+              'leaseSeconds':30,
+              'idleTimeoutSeconds':20,
+              'disconnectGraceSeconds':12,
+              'startupGraceSeconds':4,
+              'reaperIntervalSeconds':1,
+          }, h
+          assert w['status']=='ok', w
+          assert w['phase']==6, w
+          assert w['lifecycleOwner']=='laravel', w
+          assert w['crashWatchdog']=='process-exit-cleanup', w
+          assert w['viewer']['rawCdpExposed'] is False, w
+          PY
+
+      - name: Verify autonomous reaper command is running
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 15); do
+            docker compose logs --no-color lifecycle-reaper > /tmp/reaper.log
+            if grep -F '"phase":6' /tmp/reaper.log; then break; fi
+            sleep 1
+          done
+          cat /tmp/reaper.log
+          grep -F '"phase":6' /tmp/reaper.log
+
+      - name: Phase 6 lifecycle and restart reconciliation E2E
+        run: python3 tests/phase6-e2e.py
+
+      - name: Verify no browser process or profile residue
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
+          console.log('phase6_cleanup_scan=clean');
+          NODE
+
+      - name: Verify durable lifecycle records are closed or failed
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "open_sessions=0\n";
+          '
+
+      - name: Final reaper and container status
+        run: |
+          docker compose exec -T api php artisan browser:sessions:reap
+          docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
