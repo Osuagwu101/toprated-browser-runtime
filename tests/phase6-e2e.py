@@ -117,7 +117,7 @@ def wait_for(predicate, description, timeout=25, interval=0.5):
             last = predicate()
             if last:
                 return last
-        except Exception as exc:  # diagnostic state is included on timeout
+        except Exception as exc:
             last = repr(exc)
         time.sleep(interval)
     raise AssertionError(f'timed out waiting for {description}; last={last!r}')
@@ -158,7 +158,6 @@ def wait_worker_health():
     return wait_for(check, 'worker health', timeout=40, interval=1)
 
 
-# Phase 6 health/config must expose the blueprint lifecycle values under test.
 health = wait_api_health()
 worker_health = wait_worker_health()
 assert health['phase'] == 6, health
@@ -197,7 +196,7 @@ code, fresh_grant = signed('POST', f"/api/sessions/{reconnect['sessionId']}/view
 assert code == 200 and fresh_grant['viewerGrant'], (code, fresh_grant)
 post_reconnect = db_row(reconnect['sessionId'])
 assert post_reconnect['last_heartbeat_at'] != pre_reconnect['last_heartbeat_at'], (pre_reconnect, post_reconnect)
-time.sleep(3.0)  # crosses the pre-reconnect disconnect deadline
+time.sleep(3.0)
 reconnect_worker_status = worker_json('GET', f'/browser/sessions/{reconnect_worker}')
 assert int(reconnect_worker_status['pid']) == reconnect_pid, reconnect_worker_status
 code, reconnect_status = signed('GET', f"/api/sessions/{reconnect['sessionId']}", 'phase6-reconnect')
@@ -257,7 +256,7 @@ assert code == 200 and after_api_restart['status'] == 'active', (code, after_api
 signed('DELETE', f"/api/sessions/{restart_api['sessionId']}", 'phase6-api-restart')
 
 # 9) Restarting the worker removes its browsers; durable stale records are reconciled and capacity recovers automatically.
-restart_worker, restart_worker_id, _restart_worker_pid = create_session('phase6-worker-restart')
+restart_worker, _restart_worker_id, _restart_worker_pid = create_session('phase6-worker-restart')
 subprocess.run(['docker', 'compose', 'restart', 'browser-worker'], check=True)
 wait_worker_health()
 worker_restart_row = wait_terminal(restart_worker['sessionId'], expected_reason='failure', expected_failure='WORKER_SESSION_MISSING')
@@ -273,12 +272,12 @@ stale_id = 'aaaaaaaa-bbbb-4ccc-8ddd-000000000006'
 php(
     '$db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");'
     '$s=$db->prepare("insert into browser_sessions (id,writer_id,tool_slug,launch_url,status,last_heartbeat_at,last_activity_at,created_at,updated_at) values (?,?,?,?,?,?,?,?,?)");'
-    f'$s->execute(["{stale_id}","phase6-stale","generic-phase6-lifecycle","data:text/html","starting",datetime("now"),datetime("now"),datetime("now","-10 seconds"),datetime("now","-10 seconds")]);'
+    '$now=date("Y-m-d H:i:s");$old=date("Y-m-d H:i:s",time()-10);'
+    f'$s->execute(["{stale_id}","phase6-stale","generic-phase6-lifecycle","data:text/html","starting",$now,$now,$old,$old]);'
 )
 stale_row = wait_terminal(stale_id, expected_reason='failure', expected_failure='STARTUP_TIMEOUT')
 assert stale_row['status'] == 'failed', stale_row
 
-# Final invariant: no open durable records and no worker/browser sessions remain.
 code, final_capacity = signed('GET', '/api/capacity', 'phase6-final')
 assert code == 200, (code, final_capacity)
 assert final_capacity['openSessions'] == 0, final_capacity
