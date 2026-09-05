@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
 
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
@@ -127,7 +128,19 @@ export class BrowserSessionController {
     return { phase: RUNTIME_PHASE, activeCount: this.sessions.size, startingCount: this.startingCount, maxSessions: this.maxSessions, sessions: [...this.sessions.values()].map((session) => this.present(session)) };
   }
 
-  present(session) { return { active: true, phase: RUNTIME_PHASE, sessionId: session.sessionId, pid: session.process.pid, url: session.url, title: session.title, viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }, viewer: 'restricted' }; }
+  present(session) {
+    return {
+      active: true,
+      phase: RUNTIME_PHASE,
+      sessionId: session.sessionId,
+      pid: session.process.pid,
+      url: session.url,
+      title: session.title,
+      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      viewer: 'restricted',
+      authentication: { required: session.authenticationRequired === true, verified: session.authenticationVerified === true },
+    };
+  }
   isProcessAlive(session) { return session.process.exitCode === null && session.process.signalCode === null && existsSync(`/proc/${session.process.pid}`); }
   pruneExited() { for (const [sessionId, session] of this.sessions.entries()) if (!this.isProcessAlive(session)) this.scheduleUnexpectedExitCleanup(sessionId); }
   scheduleUnexpectedExitCleanup(sessionId) {
@@ -144,7 +157,7 @@ export class BrowserSessionController {
   getStatus(sessionId) { return this.present(this.assertSession(sessionId)); }
   onlySessionId() { this.pruneExited(); if (this.sessions.size === 0) throw Object.assign(new Error('No browser session is active.'), { statusCode: 409 }); if (this.sessions.size !== 1) throw Object.assign(new Error('Legacy single-session operation is ambiguous while multiple browser sessions are active.'), { statusCode: 409 }); return this.sessions.keys().next().value; }
 
-  async start(url = DEFAULT_TEST_URL) {
+  async start(url = DEFAULT_TEST_URL, options = {}) {
     this.pruneExited();
     if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
     if (!existsSync(this.executablePath)) throw new Error(`Chromium executable not found: ${this.executablePath}`);
@@ -161,15 +174,38 @@ export class BrowserSessionController {
       await cdp.connect(); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
       await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT, deviceScaleFactor: 1, mobile: false });
       sessionId = randomUUID();
-      this.sessions.set(sessionId, { sessionId, process: browserProcess, userDataDir, port, cdp, url: 'about:blank', title: '' });
+      this.sessions.set(sessionId, {
+        sessionId,
+        process: browserProcess,
+        userDataDir,
+        port,
+        cdp,
+        url: 'about:blank',
+        title: '',
+        authenticationRequired: options?.authentication?.required === true,
+        authenticationVerified: false,
+      });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
-      await this.navigate(sessionId, safeUrl);
+
+      const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
+      try {
+        await this.navigate(sessionId, safeUrl);
+      } finally {
+        await removeBrowserStateBootstrap(cdp, bootstrap.scriptIdentifier);
+      }
+      const authentication = await verifyAuthentication(cdp, options?.authentication || {});
+      const session = this.assertSession(sessionId);
+      session.authenticationRequired = authentication.required === true;
+      session.authenticationVerified = authentication.verified === true;
       return this.getStatus(sessionId);
     } catch (error) {
       if (sessionId && this.sessions.has(sessionId)) { try { await this.stop(sessionId); } catch {} }
       else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); rmSync(userDataDir, { recursive: true, force: true }); }
       const detail = stderr.trim().slice(-1500);
-      throw Object.assign(new Error(detail ? `${error.message} Chromium: ${detail}` : error.message), { statusCode: error?.statusCode });
+      const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
+      if (error?.statusCode) wrapped.statusCode = error.statusCode;
+      if (error?.code) wrapped.code = error.code;
+      throw wrapped;
     } finally { this.startingCount -= 1; }
   }
 
