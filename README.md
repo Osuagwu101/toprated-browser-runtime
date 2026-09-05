@@ -15,7 +15,7 @@ Verified status:
 - Phase 5 — writer/browser isolation and session ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 6 — lifecycle management: **GREEN / COMPLETE / APPROVED**.
 - Phase 7 — generic tool-profile framework: **GREEN / COMPLETE / APPROVED**.
-- Phase 8 — Phrasly reference implementation: **NOT STARTED**.
+- Phase 8 — Phrasly reference implementation: **IN TEST — REAL PHRASLY SHARED-STATE PROOF PENDING**.
 
 The existing Browser Use production path remains untouched.
 
@@ -48,8 +48,6 @@ That tested head was promoted through PR #7 to standalone `main` commit `20a8115
 - Phase 4 Laravel Session API — run `33910146517`;
 - Phase 5 Session Isolation — run `33910146434`; and
 - Phase 6 Lifecycle Management — run `33910146416`.
-
-Each authoritative workflow runs `scripts/typecheck.sh`, which checks all Node `.mjs` files with `node --check`, all non-vendor PHP files with `php -l`, Python tests with `py_compile`, JSON manifests with `json.tool`, and Docker Compose configuration with `docker compose config --quiet`.
 
 The final Phase 6 audit is recorded in `docs/audits/phase-6.md`. `docs/audits/ISSUE_REGISTER.md` preserves `SB-006-001` through `SB-006-004`, including the RED-run history and corrective actions; all four findings are **FIXED / CLOSED**. The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
 
@@ -87,32 +85,72 @@ PR #9 promoted that exact tested head to standalone `main` commit `67281ba8815f2
 - Phase 6 Lifecycle Management — run `33939565173`; and
 - Phase 7 Generic Tool Profiles — run `33939565154`.
 
-The Phase 7 audit is recorded in `docs/audits/phase-7.md`; the final closure certificate is recorded in `docs/audits/phase-7-closure.md`. `docs/audits/ISSUE_REGISTER.md` preserves `SB-007-001` through `SB-007-003`, including the RED history and corrective actions; all Phase 7 findings are **FIXED / CLOSED**. The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
+The Phase 7 audit is recorded in `docs/audits/phase-7.md`; the final closure certificate is recorded in `docs/audits/phase-7-closure.md`. Owner approval for Phase 7 was received on 2026-09-05. Phase 7 is therefore **GREEN / COMPLETE / APPROVED**.
 
-Owner approval for Phase 7 was received on 2026-09-05. Phase 7 is therefore **GREEN / COMPLETE / APPROVED**. Phase 8 is eligible to begin only on explicit instruction and remains **NOT STARTED**.
+## Phase 8 implementation evidence
+
+Phase 8 was opened explicitly from approved Phase 7 standalone `main` commit `f92d5f5b2e44905e977bca14ed12a5db44823738` on branch `phase8-phrasly-reference`.
+
+The current implementation adds:
+
+- the first real `phrasly` tool profile, kept in tool configuration rather than common browser code;
+- a generic browser-state policy and authentication-indicator extension to the profile registry;
+- signed, bounded delivery of authorized shared browser state from Laravel to the private worker;
+- cookie injection plus `localStorage`/`sessionStorage` bootstrap before protected navigation;
+- allowed-host validation for state/cookie injection;
+- rejection of writer password, OTP and verification-code fields;
+- rejection of non-empty reusable `auth_headers` in the Phase 8 state contract;
+- generic authentication verification before Laravel activates the browser or issues the first viewer grant;
+- cleanup of unverified browsers with no viewer grant;
+- no raw browser-state persistence in durable session records; and
+- a manual real-Phrasly acceptance harness that reads state only from a permission-restricted local file and never prints it.
+
+The exact first complete implementation head `edd8306f27d1d9302da1f783a5fd1fef35dad456` passed all six authoritative workflows on the same SHA:
+
+- Verified Through Phase 3 — run `33941292711` — SUCCESS;
+- Phase 4 Laravel Session API — run `33941292710` — SUCCESS;
+- Phase 5 Session Isolation — run `33941292709` — SUCCESS;
+- Phase 6 Lifecycle Management — run `33941292708` — SUCCESS;
+- Phase 7 Generic Tool Profiles — run `33941292701` — SUCCESS; and
+- Phase 8 Phrasly Reference Implementation — run `33941292707` — SUCCESS.
+
+The dedicated Phase 8 E2E uses a deterministic authenticated-state fixture to prove cookies, `localStorage` and `sessionStorage` are injected before page scripts, authentication is verified before viewer access, invalid state receives no viewer, state is not returned to the writer, state markers are absent from runtime logs, and failed/unverified browsers leave no residue.
+
+This is mechanism evidence, not the final Blueprint gate. Phase 8 remains **IN TEST** until `scripts/phase8-phrasly-acceptance.py` is run with a real currently-authorized Phrasly shared state and proves that one self-hosted Chromium reaches authenticated Phrasly. Raw shared state must never be pasted into chat, committed to Git, or stored in ordinary logs.
+
+The current Phase 8 audit is recorded in `docs/audits/phase-8.md`.
 
 ## Architecture
 
-- `api/` — Laravel control plane: signed service API, persistent session records, writer ownership, generic tool-profile policy, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
-- `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated Chromium profiles, restricted frame/input viewer, signed-grant verification and per-session process-exit cleanup.
+- `api/` — Laravel control plane: signed service API, persistent session records, writer ownership, generic tool-profile/state policy, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
+- `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated Chromium profiles, ephemeral authorized-state injection, generic authentication verification, restricted frame/input viewer and exact per-session cleanup.
 - `docker-compose.yml` — portable Linux + Docker topology with persistent runtime DB storage and localhost-only host publication for the current development/CI environment.
 - `scripts/typecheck.sh` — repository-wide executable type/syntax/configuration gate for the current language/toolchain.
+- `scripts/phase8-phrasly-acceptance.py` — manual safe acceptance harness for the real Phrasly Phase 8 exit gate.
 - `docs/audits/` — phase gates, issue history and regression evidence.
 
-The runtime core is intentionally generic and is not hardcoded to Phrasly or another tool.
+The runtime core remains generic. Tool-specific URLs, state requirements and authentication indicators live in tool profiles.
 
-## Generic tool-profile model
+## Generic tool-profile and shared-state model
 
-Phase 7 launch requests identify a writer and `tool_slug`; Laravel resolves the configured profile before any browser is created. The caller does not control the destination URL.
+Launch requests identify a writer and `tool_slug`; Laravel resolves the configured profile before any browser is created. The caller does not control the destination URL.
 
-Current Phase 7 profile fields are deliberately minimal:
+Current profile fields are:
 
 - `enabled`
 - `launch_url`
+- optional `browser_state.required`
+- optional `browser_state.allowed_hosts`
+- optional `authentication.required`
+- optional `authentication.url_contains_any`
+- optional `authentication.selectors_any`
+- optional `authentication.timeout_seconds`
 
-`{writer_id}` is the supported launch template placeholder. Unknown/disabled profiles and unsupported profile fields/placeholders fail closed. The broader Blueprint profile concept — saved browser-state requirements, authenticated/logged-out/OTP indicators and optional navigation/validation rules — is introduced only as the later reference/adapter phases require it rather than being hardcoded into the common browser layer.
+`{writer_id}` remains the supported launch template placeholder. Unknown/disabled profiles and unsupported profile fields/placeholders fail closed.
 
-Phrasly itself is not configured in Phase 7. The first real Phrasly profile and saved authenticated-state injection belong to Phase 8.
+For stateful profiles, raw authorized state is accepted only on the signed service API and authenticated private worker control plane. Phase 8 accepts cookies and Web Storage, constrains them to the profile's allowed hosts, injects them into a fresh isolated Chromium, verifies the configured authenticated indicators, then returns viewer access. The raw state is not stored in the durable `browser_sessions` table.
+
+Phrasly is the Phase 8 reference profile. Authentication-failure/admin-reauth behavior remains Phase 9 work and is not claimed here.
 
 ## Session API
 
@@ -132,7 +170,7 @@ Signed service routes:
 
 Service requests are HMAC-SHA256 signed with timestamp, nonce, writer identity and request-body hash. Replayed nonces are rejected. Worker lifecycle endpoints require a separate internal worker-control secret.
 
-`MAX_BROWSER_SESSIONS` is validated configuration from 1 through the blueprint design ceiling of 15. Broader 5/10/15 concurrency proof remains Phase 18 work rather than a Phase 7 claim.
+`MAX_BROWSER_SESSIONS` remains validated configuration up to the Blueprint design ceiling of 15. Empirical 5/10/15 concurrency proof remains Phase 18 work.
 
 ## Lifecycle model
 
@@ -147,7 +185,7 @@ Service requests are HMAC-SHA256 signed with timestamp, nonce, writer identity a
 ## Viewer security model
 
 - Laravel is the viewer-grant issuer.
-- Viewer tokens are HMAC-SHA256 signed and contain browser session ID, writer ID, issue/expiry time and random token ID.
+- Viewer tokens are HMAC-SHA256 signed and bound to browser session and writer identity.
 - Signing secret minimum: 32 bytes.
 - Viewer token TTL is bounded to 900 seconds maximum.
 - Initial token transport uses the URL fragment, then Bearer authorization.
@@ -171,21 +209,20 @@ curl http://127.0.0.1:18081/health
 docker compose down -v --remove-orphans
 ```
 
-Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNTIME_SERVICE_AUTH_SECRET`, `WORKER_CONTROL_SECRET`, `VIEWER_SIGNING_SECRET`, viewer TTL/base URL, valid `MAX_BROWSER_SESSIONS`, valid lifecycle policy values and a valid tool-profile configuration source.
+Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNTIME_SERVICE_AUTH_SECRET`, `WORKER_CONTROL_SECRET`, `VIEWER_SIGNING_SECRET`, viewer TTL/base URL, valid `MAX_BROWSER_SESSIONS`, valid lifecycle policy values, `BROWSER_STATE_MAX_BYTES` and a valid tool-profile configuration source.
 
 ## Blueprint sequencing
 
-Phase 7 is closed. The following work is still not implemented or claimed:
+Phase 8 is **IN TEST**. The following work remains later-phase work and is not claimed:
 
-- Phase 8 Phrasly saved-state injection and authenticated reference implementation;
 - Phase 9 authentication-failure/admin-reauth behavior;
 - Phase 10 second-tool proof;
-- Phase 11 security hardening beyond the inherited controls already required for current gates;
+- Phase 11 security hardening beyond inherited/current controls;
 - Phase 12/18 empirical resource and concurrency measurements;
-- Phase 14 production-host deployment; and
+- Phase 14 production-host deployment;
 - Phase 15 production provider integration.
 
-Phase 8 is now eligible to start under the Blueprint sequence, but remains **NOT STARTED** until explicitly requested.
+Phase 9 must not start until the Phase 8 exit gate is demonstrated with real Phrasly state and the owner subsequently approves Phase 8.
 
 ## Financial rule
 
@@ -193,4 +230,4 @@ Final production capacity must run on predictable fixed-price Linux VPS infrastr
 
 ## Production safety
 
-This standalone repository is still pre-production. Phase 7 does not switch the live application from Browser Use and does not add a production Phrasly integration. Provider integration happens only in the later Blueprint integration phase after the standalone runtime passes its subsequent gates.
+This standalone repository is still pre-production. Phase 8 does not switch the live application from Browser Use, does not modify production Browser Use behavior, and does not move Phrasly credentials or OTPs to writers. Provider integration happens only in the later Blueprint integration phase after the standalone runtime passes its subsequent gates.
