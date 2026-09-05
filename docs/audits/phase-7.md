@@ -1,14 +1,18 @@
 # Phase 7 Audit — Generic Tool-Profile Framework
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
+Status: **GREEN / COMPLETE / APPROVED**
+
+Owner approval date: **2026-09-05**
 
 Phase anchor:
 
 - Current phase: **Phase 7 — Generic Tool-Profile Framework**
-- Last completed phase: **Phase 6 — Lifecycle Management**, approved 2026-09-04
+- Last completed phase before Phase 7: **Phase 6 — Lifecycle Management**, approved 2026-09-04
 - Blueprint: **Master Blueprint v1.1**
 - Standalone Phase 6 baseline: `304753b3b7ac8c654adf263edbee8d56a9619148`
 - Phase 7 implementation branch: `phase7-tool-profiles`
+- Final documented Phase 7 head: `a6a17e43c1109533a1230c719b2524455837a8d4`
+- Promoted standalone `main` head: `67281ba8815f2a407d4f2e6904ce1d7c38880d1d`
 
 Blueprint exit gate:
 
@@ -58,9 +62,25 @@ The launch controller does not trust a caller-provided destination. A supplied `
 
 No tool credential, OTP, cookie, storage token, CDP endpoint, Docker/host capability or signing secret was added to the profile model or response surface.
 
-## Regression issue found and fixed during verification
+## Regression issues found and fixed
+
+### SB-007-001 — Missing authoritative tool-profile model
+
+The Phase 6 launch path did not have a server-owned tool profile mapping. Phase 7 introduced `ToolProfileRegistry`, validated configured profiles and server-owned launch-target resolution. Unknown, disabled and malformed profiles fail closed.
+
+Status: **FIXED / CLOSED**.
+
+### SB-007-002 — Reaper sequencing interfered with inherited pre-reaper regression setup
+
+The first combined Phase 7 workflow started the autonomous Phase 6 reaper while inherited Phase 4/5 fixtures were still running their historical setup sequence. The workflow was corrected so Phase 4/5 inherited regressions execute before the autonomous reaper is started; the reaper is then mandatory for Phase 6 lifecycle verification and final cleanup.
+
+Status: **FIXED / CLOSED**.
+
+### SB-007-003 — API restart could expose a transient worker-read connection refusal
 
 The first complete inherited Phase 6 regression on the Phase 7 branch exposed a real restart race. Immediately after `docker compose restart api`, Laravel could be healthy while an idempotent API-to-worker read briefly encountered a connection refusal and returned `WORKER_UNAVAILABLE`.
+
+RED evidence retained: Phase 6 Lifecycle Management run `33919958668`, job `101175779193`.
 
 The fix was applied in `api/app/Services/BrowserWorkerClient.php` at commit `d1d9269b7f1dda161ac1c72f9eae7884b4d59266`:
 
@@ -71,11 +91,11 @@ The fix was applied in `api/app/Services/BrowserWorkerClient.php` at commit `d1d
 
 The inherited Phase 6 test was not weakened, skipped or rewritten around the failure. The same test passed after the runtime fix.
 
-RED evidence retained: Phase 6 Lifecycle Management run `33919958668`, job `101175779193`.
+Status: **FIXED / CLOSED**.
 
-## Same-head implementation verification
+## Corrected implementation verification
 
-Exact implementation head: `d1d9269b7f1dda161ac1c72f9eae7884b4d59266`.
+Exact corrected implementation head: `d1d9269b7f1dda161ac1c72f9eae7884b4d59266`.
 
 All authoritative workflows passed on that same SHA:
 
@@ -84,6 +104,18 @@ All authoritative workflows passed on that same SHA:
 - Phase 5 Session Isolation — run `33926255038` — **SUCCESS**;
 - Phase 6 Lifecycle Management — run `33926255036` — **SUCCESS**;
 - Phase 7 Generic Tool Profiles — run `33926255054` — **SUCCESS**.
+
+## Final documented branch verification
+
+Exact final documented branch head: `a6a17e43c1109533a1230c719b2524455837a8d4`.
+
+All five authoritative workflows passed again on that exact SHA:
+
+- Verified Through Phase 3 — run `33926867078` — **SUCCESS**;
+- Phase 4 Laravel Session API — run `33926867092` — **SUCCESS**;
+- Phase 5 Session Isolation — run `33926867099` — **SUCCESS**;
+- Phase 6 Lifecycle Management — run `33926867114` — **SUCCESS**;
+- Phase 7 Generic Tool Profiles — run `33926867048` — **SUCCESS**.
 
 The Phase 7 workflow additionally proves:
 
@@ -101,14 +133,28 @@ The Phase 7 workflow additionally proves:
 - Chromium/profile residue scan is clean; and
 - durable session records are terminal at the end of the run.
 
+## Controlled promotion verification
+
+PR #9 promoted the exact final documented Phase 7 head `a6a17e43c1109533a1230c719b2524455837a8d4` to standalone `main`.
+
+Promoted `main` head: `67281ba8815f2a407d4f2e6904ce1d7c38880d1d`.
+
+All five authoritative workflows passed on that resulting `main` SHA:
+
+- Verified Through Phase 3 — run `33939565151` — **SUCCESS**;
+- Phase 4 Laravel Session API — run `33939565157` — **SUCCESS**;
+- Phase 5 Session Isolation — run `33939565153` — **SUCCESS**;
+- Phase 6 Lifecycle Management — run `33939565173` — **SUCCESS**;
+- Phase 7 Generic Tool Profiles — run `33939565154` — **SUCCESS**.
+
 ## Standing invariant check
 
-1. **Browser Use untouched — PASS.** Phase 7 changes are confined to the standalone runtime; production recheck is required again immediately before approval.
+1. **Browser Use untouched — PASS.** Phase 7 changes are confined to the standalone runtime; the production website repository remained unchanged after promotion.
 2. **Separation maintained — PASS.** No production application integration is introduced; that remains Phase 15.
 3. **Generic, not Phrasly-hardcoded — PASS.** Core-source CI scan is clean and the configured launch path is generic.
 4. **Credentials never reach writers — PASS.** No credential/state/OTP surface was introduced; inherited viewer/service controls pass.
 5. **No raw CDP or unrestricted DevTools exposure — PASS.** Static exposure scan and inherited viewer regressions pass.
-6. **Session isolation — PASS.** Inherited Phase 5 same-origin isolation regression passes on the Phase 7 implementation head.
+6. **Session isolation — PASS.** Inherited Phase 5 same-origin isolation regression passes.
 7. **Active sessions protected — PASS.** Inherited Phase 6 lifecycle regression passes.
 8. **Abandoned sessions die — PASS.** Inherited Phase 6 reaper, crash, orphan and restart reconciliation regression passes.
 9. **Capacity is configuration — PASS.** Existing 1..15 configuration model is preserved; empirical 5/10/15 proof remains Phase 18.
@@ -117,6 +163,12 @@ The Phase 7 workflow additionally proves:
 12. **Logging policy — PASS.** Profile health exposes only counts/validity; no secret-bearing log path was added.
 13. **Rollback preserved — PASS.** Production Browser Use remains independent and no production provider switch is introduced in Phase 7.
 14. **Spend discipline — PASS.** No hosting purchase or paid infrastructure is introduced or recommended.
+
+## Production isolation
+
+After the Phase 7 promotion, the production website/Browser Use repository `Osuagwu101/topratedseotools-0bc24c5f` was rechecked and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
+
+Phase 7 therefore did not alter the production Browser Use path.
 
 ## Known limitations and correctly deferred work
 
@@ -133,8 +185,10 @@ The generic profile schema is intentionally minimal in Phase 7. The Blueprint's 
 
 ## Gate decision
 
-**TECHNICALLY SATISFIED.** The runtime launches a server-configured generic tool without Phrasly-specific branching in core infrastructure, and all inherited behavioral gates pass on the same implementation SHA.
+**SATISFIED / APPROVED.** The runtime launches a server-configured generic tool without Phrasly-specific branching in core infrastructure, all inherited behavioral gates passed on the final documented branch head and promoted `main`, and the owner explicitly approved Phase 7 as COMPLETE on 2026-09-05.
 
-No known Critical/High or gate-blocking Phase 7 defect remains open at the implementation head.
+No known Critical, High or gate-blocking Phase 7 defect remains open.
 
-Phase 7 is **not COMPLETE until the owner explicitly approves it**. Phase 8 must not start before that approval.
+Phase 7 is **GREEN / COMPLETE / APPROVED**.
+
+Phase 8 is eligible to begin only on explicit instruction and remains **NOT STARTED** by this closure.
