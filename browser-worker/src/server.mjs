@@ -19,7 +19,7 @@ function writeJson(response, statusCode, payload) { response.writeHead(statusCod
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', 'content-security-policy': `default-src 'none'; img-src 'self' blob: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`, 'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()', 'cross-origin-opener-policy': 'same-origin', 'cross-origin-resource-policy': 'same-origin', 'x-frame-options': 'DENY' })); response.end(html); }
 async function readJson(request, maxBytes = 16 * 1024) { let body = ''; for await (const chunk of request) { body += String(chunk); if (Buffer.byteLength(body) > maxBytes) throw Object.assign(new Error('Request body is too large.'), { statusCode: 413 }); } if (!body.trim()) return {}; try { return JSON.parse(body); } catch { throw Object.assign(new Error('Request body must be valid JSON.'), { statusCode: 400 }); } }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
-function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
+function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
 function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
@@ -57,6 +57,7 @@ const server = http.createServer(async (request, response) => {
     if (browserSessionRoute) {
       const { sessionId, action } = browserSessionRoute;
       if (request.method === 'GET' && action === 'status') return writeJson(response, 200, controller.getStatus(sessionId));
+      if (request.method === 'GET' && action === 'authorized-state') return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
       if (request.method === 'POST' && action === 'navigate') {
         const body = await readJson(request);
         if (!body.url) throw Object.assign(new Error('url is required.'), { statusCode: 400 });
