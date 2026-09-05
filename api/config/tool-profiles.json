@@ -15,6 +15,33 @@
     "enabled": true,
     "launch_url": "data:text/html,%3Ctitle%3EPhase%207%20Generic%20Configured%20Tool%3C/title%3E%3Ch1%3EGeneric%20Configured%20Tool%3C/h1%3E"
   },
+  "generic-phase8-state": {
+    "enabled": true,
+    "launch_url": "http://127.0.0.1:19091/dashboard",
+    "browser_state": {
+      "required": true,
+      "allowed_hosts": ["127.0.0.1"]
+    },
+    "authentication": {
+      "required": true,
+      "url_contains_any": ["/dashboard"],
+      "selectors_any": ["[data-phase8-authenticated=\"true\"]"],
+      "timeout_seconds": 5
+    }
+  },
+  "phrasly": {
+    "enabled": true,
+    "launch_url": "https://phrasly.ai/dashboard",
+    "browser_state": {
+      "required": true,
+      "allowed_hosts": ["phrasly.ai"]
+    },
+    "authentication": {
+      "required": true,
+      "url_contains_any": ["/dashboard"],
+      "timeout_seconds": 15
+    }
+  },
   "generic-disabled": {
     "enabled": false,
     "launch_url": "data:text/html,%3Ctitle%3EDisabled%3C/title%3E"
