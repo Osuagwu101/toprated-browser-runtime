@@ -6,6 +6,7 @@ on:
       - phase5-session-isolation
       - phase6-lifecycle-management
       - phase7-tool-profiles
+      - phase8-phrasly-reference
       - main
   workflow_dispatch:
 
@@ -47,8 +48,8 @@ jobs:
             echo 'Browser worker must not issue viewer grants.' >&2
             exit 1
           fi
-          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
-            echo 'Phase 5 core runtime contains tool-specific Phrasly logic.' >&2
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config/browser.php; then
+            echo 'Generic runtime core contains tool-specific Phrasly logic.' >&2
             exit 1
           fi
           if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
