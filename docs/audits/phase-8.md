@@ -149,3 +149,35 @@ An unauthenticated request to `https://phrasly.ai/dashboard` currently redirects
 The **mechanism is VERIFIED** on the deterministic Phase 8 fixture and every inherited gate is green. The **Blueprint exit gate is not yet fully satisfied**, because no live authorized Phrasly shared state has yet been exercised through the standalone runtime in this phase record.
 
 Phase 8 remains **IN TEST**. Phase 9 is **NOT STARTED**.
+
+
+## Approved temporary admin-authentication amendment
+
+Owner approval was explicitly received on 2026-09-05 for a narrowly scoped, temporary operator-only Phase 8 authentication/capture harness.
+
+The amendment exists solely to obtain the real shared Phrasly state needed by the Phase 8 exit gate after Phrasly's Cloudflare verification prevented the connected cloud browser from completing authentication. It does not authorize bypassing Cloudflare, expose authentication to writers, change production Browser Use, or implement the general Phase 9 admin-reauth experience.
+
+Implementation:
+
+- `phrasly-admin-bootstrap` is a tool-configuration-only launch target for the operator harness;
+- `scripts/phase8-admin-auth-harness.py` requires both runtime operator secrets and never accepts or prints a Phrasly password or OTP;
+- the one-time viewer URL is written to a permission-restricted local file instead of ordinary output;
+- the owner completes Phrasly and any human verification directly in the restricted self-hosted viewer;
+- `GET /browser/sessions/{id}/authorized-state` is private-worker-control authenticated;
+- captured cookies are limited to the active Phrasly origin hierarchy;
+- Web Storage is captured only from the active origin;
+- the harness immediately launches a fresh `phrasly` session with the captured state and requires the configured authenticated result; and
+- temporary state and viewer-link files plus both Chromium sessions are removed in final cleanup.
+
+Exact verified implementation head: `57182a5f4cbcc654981fda7bbf565ad7b8d7ae03`.
+
+Authoritative workflow evidence on that exact SHA:
+
+- Verified Through Phase 3 — run `33945655810` — **SUCCESS**;
+- Phase 4 Laravel Session API — run `33945655788` — **SUCCESS**;
+- Phase 5 Session Isolation — run `33945655813` — **SUCCESS**;
+- Phase 6 Lifecycle Management — run `33945655770` — **SUCCESS**;
+- Phase 7 Generic Tool Profiles — run `33945655773` — **SUCCESS**; and
+- Phase 8 Phrasly Reference Implementation — run `33945655774` — **SUCCESS**.
+
+The Phase 8 workflow proves that state export fails without the private worker-control secret and succeeds only on the authenticated private control plane. The actual live Phrasly run remains required before the Blueprint exit gate can be declared technically green.
