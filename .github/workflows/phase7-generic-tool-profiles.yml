@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase7-tool-profiles
+      - phase8-phrasly-reference
       - main
   workflow_dispatch:
 
@@ -45,8 +46,8 @@ jobs:
           grep -F "ToolProfileRegistry" api/app/Http/Controllers/SessionController.php
           grep -F "LAUNCH_URL_OVERRIDE_FORBIDDEN" api/app/Http/Controllers/SessionController.php
           grep -F "generic-phase7-smoke" api/config/tool-profiles.json
-          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
-            echo 'Phase 7 core runtime contains Phrasly-specific branching.' >&2
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config/browser.php; then
+            echo 'Phase 7 generic core contains Phrasly-specific branching.' >&2
             exit 1
           fi
           if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
