@@ -20,12 +20,18 @@
     "launch_url": "http://127.0.0.1:19091/dashboard",
     "browser_state": {
       "required": true,
-      "allowed_hosts": ["127.0.0.1"]
+      "allowed_hosts": [
+        "127.0.0.1"
+      ]
     },
     "authentication": {
       "required": true,
-      "url_contains_any": ["/dashboard"],
-      "selectors_any": ["[data-phase8-authenticated=\"true\"]"],
+      "url_contains_any": [
+        "/dashboard"
+      ],
+      "selectors_any": [
+        "[data-phase8-authenticated=\"true\"]"
+      ],
       "timeout_seconds": 5
     }
   },
@@ -34,11 +40,29 @@
     "launch_url": "https://phrasly.ai/dashboard",
     "browser_state": {
       "required": true,
-      "allowed_hosts": ["phrasly.ai"]
+      "allowed_hosts": [
+        "phrasly.ai"
+      ]
     },
     "authentication": {
       "required": true,
-      "url_contains_any": ["/dashboard"],
+      "url_contains_any": [
+        "/dashboard"
+      ],
+      "timeout_seconds": 15
+    }
+  },
+  "phrasly-admin-bootstrap": {
+    "enabled": true,
+    "launch_url": "https://phrasly.ai/login",
+    "browser_state": {
+      "required": false,
+      "allowed_hosts": [
+        "phrasly.ai"
+      ]
+    },
+    "authentication": {
+      "required": false,
       "timeout_seconds": 15
     }
   },
