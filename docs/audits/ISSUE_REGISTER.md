@@ -289,3 +289,30 @@ Owner approval was explicitly received on **2026-09-05**. No Critical, High or g
 Phase 7 is **GREEN / COMPLETE / APPROVED**.
 
 Phase 8 — Phrasly reference implementation — is **NOT STARTED** and must begin only on explicit later instruction.
+
+
+# Phase 8 issues
+
+### SB-008-001 through SB-008-005 — Phrasly profile, shared-state injection, pre-viewer authentication verification, ephemeral state handling and live-proof requirement
+
+Severity: High / gate blockers.
+
+Underlying causes and corrections are recorded in `docs/audits/phase-8.md`. The deterministic mechanism is CI-verified; the real Phrasly gate remains pending owner-operated authentication.
+
+Status: **IMPLEMENTED / CI-VERIFIED; LIVE PHRASLY PROOF PENDING**.
+
+### SB-008-006 — Cloud browser could not establish the real Phrasly state because Cloudflare verification did not complete
+
+Severity: High / exit-gate blocker.
+
+Observed: the connected cloud browser remained on Phrasly's Cloudflare security-verification page and could not legitimately create the live shared-state artifact.
+
+Underlying cause: the remote test browser was not accepted through Phrasly's human-verification boundary. Bypassing or weakening that boundary is prohibited.
+
+Owner-approved amendment: on 2026-09-05 the owner approved a temporary operator-only Phase 8 authentication harness. The harness starts Phrasly inside the self-hosted Chromium, exposes only the existing restricted viewer through a protected one-time link file, allows the owner to complete Phrasly/Cloudflare verification directly, captures only the active Phrasly origin's cookies and Web Storage through the authenticated private worker control plane, immediately proves the captured state in a fresh Chromium session, and removes temporary state/link files.
+
+Security controls: runtime operator service and worker-control secrets are required; writers receive neither secret nor raw captured state; the state-export route rejects unauthenticated calls; no password or OTP is accepted by the harness; captured state is not printed or durably stored.
+
+Evidence: exact implementation head `57182a5f4cbcc654981fda7bbf565ad7b8d7ae03` passed all six authoritative workflows: Verified Through Phase 3 `33945655810`, Phase 4 `33945655788`, Phase 5 `33945655813`, Phase 6 `33945655770`, Phase 7 `33945655773`, and Phase 8 `33945655774`.
+
+Status: **IMPLEMENTED / CI-VERIFIED; OWNER-OPERATED LIVE LOGIN STILL REQUIRED**.
