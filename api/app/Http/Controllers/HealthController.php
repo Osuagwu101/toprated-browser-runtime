@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\AuthorizedBrowserState;
 use App\Services\BrowserWorkerClient;
 use App\Services\SessionManager;
 use App\Services\ToolProfileRegistry;
@@ -17,15 +18,19 @@ final class HealthController
         ViewerGrantService $viewerGrants,
         SessionManager $sessions,
         ToolProfileRegistry $toolProfiles,
+        AuthorizedBrowserState $authorizedBrowserState,
     ): JsonResponse {
         $databaseHealthy = false;
         $workerHealthy = false;
         $configurationHealthy = false;
         $lifecycle = null;
+        $browserStateConfiguration = null;
         $toolProfileSummary = [
             'configurationValid' => false,
             'configuredCount' => 0,
             'enabledCount' => 0,
+            'statefulCount' => 0,
+            'authenticationRequiredCount' => 0,
         ];
 
         try {
@@ -53,12 +58,14 @@ final class HealthController
             $viewerGrants->assertConfigured();
             $lifecycle = $sessions->lifecycleConfiguration();
             $toolProfileSummary = $toolProfiles->summary();
+            $browserStateConfiguration = $authorizedBrowserState->configuration();
             $configurationHealthy = strlen((string) config('browser.service_auth_secret', '')) >= 32
                 && strlen((string) config('browser.worker_control_secret', '')) >= 32
                 && $configuredMaxSessions >= 2
                 && $configuredMaxSessions <= 15
                 && ($toolProfileSummary['configurationValid'] ?? false) === true
-                && (int) ($toolProfileSummary['enabledCount'] ?? 0) >= 1;
+                && (int) ($toolProfileSummary['enabledCount'] ?? 0) >= 1
+                && (int) ($browserStateConfiguration['maxBytes'] ?? 0) >= 4096;
         } catch (Throwable) {
             $configurationHealthy = false;
         }
@@ -79,6 +86,11 @@ final class HealthController
             'max_browser_sessions' => $configuredMaxSessions,
             'lifecycle' => $lifecycle,
             'tool_profiles' => $toolProfileSummary,
+            'browser_state' => $browserStateConfiguration === null ? null : [
+                'transport' => 'signed-service-request-to-private-worker',
+                'persistence' => 'session-ephemeral',
+                'maxBytes' => $browserStateConfiguration['maxBytes'],
+            ],
         ], $healthy ? 200 : 503);
     }
 }
