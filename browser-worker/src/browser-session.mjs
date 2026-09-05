@@ -227,6 +227,45 @@ export class BrowserSessionController {
     return { inputAccepted: true, ...(await this.refreshMetadata(sessionId)) };
   }
 
+  async exportAuthorizedState(sessionId) {
+    const session = this.assertSession(sessionId);
+    await session.cdp.send('Network.enable');
+    const cookieResult = await session.cdp.send('Network.getAllCookies', {}, 10000);
+    const cookies = Array.isArray(cookieResult?.cookies) ? cookieResult.cookies.map((cookie) => {
+      const allowed = ['name', 'value', 'domain', 'path', 'expires', 'secure', 'httpOnly', 'sameSite'];
+      return Object.fromEntries(allowed.filter((key) => cookie[key] !== undefined).map((key) => [key, cookie[key]]));
+    }) : [];
+    const storageResult = await session.cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const read = (store) => {
+          const result = {};
+          for (let index = 0; index < store.length; index += 1) {
+            const key = store.key(index);
+            if (key !== null) result[key] = store.getItem(key);
+          }
+          return result;
+        };
+        return { localStorage: read(localStorage), sessionStorage: read(sessionStorage) };
+      })()`,
+      returnByValue: true,
+    }, 10000);
+    const storage = storageResult?.result?.value;
+    if (!storage || typeof storage !== 'object' || Array.isArray(storage)) {
+      throw Object.assign(new Error('Chromium did not return exportable browser storage.'), { statusCode: 502 });
+    }
+    return {
+      authenticated_cookies: cookies,
+      session_tokens: {
+        captured_at: new Date().toISOString(),
+        storage: {
+          localStorage: storage.localStorage && typeof storage.localStorage === 'object' ? storage.localStorage : {},
+          sessionStorage: storage.sessionStorage && typeof storage.sessionStorage === 'object' ? storage.sessionStorage : {},
+        },
+      },
+      auth_headers: {},
+    };
+  }
+
   async cleanupSession(session) {
     const rootPid = session.process.pid;
     const trackedPids = [...new Set([...collectProcessTree(rootPid), ...collectProcessGroup(rootPid)])];
