@@ -27,7 +27,13 @@ if grep -Eq 'replace-with-|APP_KEY=base64:replace' "$ENV_FILE"; then
   exit 1
 fi
 
-bash scripts/typecheck.sh
+if command -v php >/dev/null 2>&1; then
+  bash scripts/typecheck.sh
+else
+  printf 'host_php=unavailable_using_docker_build_validation\n'
+  docker compose config --quiet
+fi
+
 docker compose build
 docker compose up -d
 
