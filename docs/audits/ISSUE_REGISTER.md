@@ -122,8 +122,6 @@ Severity: High / Gate blocker.
 
 Observed: Phase 4 `SessionManager`/`BrowserWorkerClient` used global status/start/stop semantics and forced `MAX_BROWSER_SESSIONS=1`.
 
-Underlying cause: the Phase 4 ownership model intentionally matched the worker's one-session capability.
-
 Corrective action: made worker calls session-scoped, reconciled tracked worker session IDs independently, and changed capacity to validated configuration from 1 through the blueprint ceiling of 15. Phase 5 correctness CI uses 3 slots; load proof remains later work.
 
 Evidence: typecheck-enabled technical runs `33883568115` and `33883567965`; promoted-main Phase 4/5 runs `33885089684` and `33885089493`.
@@ -133,10 +131,6 @@ Status: **FIXED / CLOSED**.
 ### SB-005-003 — No executable proof of same-origin browser-state and crash isolation
 
 Severity: High / Gate blocker.
-
-Observed: prior phases did not prove two writers could use the same origin without cookie, `localStorage` or `sessionStorage` crossover, or that one Chromium crash left the other session healthy.
-
-Underlying cause: those attack/failure cases were outside Phase 4's deliberate single-session scope.
 
 Corrective action: added `browser-worker/test/isolation-fixture.mjs` and `tests/phase5-e2e.py`. The test creates writers A/B simultaneously, checks independent cookie/local/session storage, rejects cross-writer lifecycle actions and cross-session viewer tokens, kills A's Chromium while B stays usable, then verifies independent cleanup and zero open records.
 
@@ -148,10 +142,6 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: inherited health reported `status: ok` regardless of configured Chromium executable availability.
-
-Underlying cause: installation state was metadata but not part of top-level health.
-
 Corrective action: worker health is `ok` only when capacity configuration is valid and Chromium is installed; otherwise it reports `degraded`.
 
 Evidence: exact-head workflows `33883567911`, `33883568115`, `33883567965`, plus promoted-main workflows `33885089657`, `33885089684`, `33885089493`.
@@ -162,19 +152,7 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: syntax/config checks were scattered across historical workflows, leaving no single command that validated all current source/configuration formats.
-
-Underlying cause: the repository accumulated Node, PHP, Python, JSON and Compose checks incrementally.
-
-Corrective action: added `scripts/typecheck.sh` and made all three current workflows execute it before behavioral tests. It runs:
-
-- `node --check` on all browser-worker `.mjs` files;
-- `php -l` on all non-vendor API PHP files;
-- `python3 -m py_compile tests/*.py`;
-- JSON validation for current manifests; and
-- `docker compose config --quiet`.
-
-The repository is plain Node ESM/PHP/Python rather than TypeScript, so no `tsc` result is fabricated.
+Corrective action: added `scripts/typecheck.sh` and made current workflows execute it before behavioral tests. It validates Node `.mjs`, non-vendor PHP, Python tests, JSON manifests and Docker Compose configuration. The repository is plain Node ESM/PHP/Python rather than TypeScript, so no `tsc` result is fabricated.
 
 Evidence: exact typecheck-enabled head `ea00b239e20382125e53ad317acf52ea1a071f29` passed runs `33883567911`, `33883568115`, `33883567965`; final documentation head `c4f5a006b763bab471fcd7bb73608606146ab67f` passed `33884697611`, `33884697657`, `33884697831`; promoted `main` `4530352a46aad31f295231813f024a120acd021b` passed `33885089657`, `33885089684`, `33885089493`.
 
@@ -182,17 +160,7 @@ Status: **FIXED / CLOSED**.
 
 ## Phase 5 closure
 
-Phase 5 is **GREEN / COMPLETE / APPROVED**.
-
-The Phase 5 exit gate — **“Writer/browser isolation passes”** — is satisfied. Pull request #5 promoted the exact tested Phase 5 head to standalone `main` commit `4530352a46aad31f295231813f024a120acd021b`. That promoted `main` passed:
-
-- Verified Through Phase 3 run `33885089657` — SUCCESS;
-- Phase 4 Laravel Session API run `33885089684` — SUCCESS; and
-- Phase 5 Session Isolation run `33885089493` — SUCCESS.
-
-The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
-
-No Critical or High Phase 5 issue remains open. Phase 6 is **IN TEST / CLOSURE**.
+Phase 5 is **GREEN / COMPLETE / APPROVED**. Its exit gate — **“Writer/browser isolation passes”** — is satisfied. Pull request #5 promoted the tested Phase 5 head to standalone `main`; final Phase 5 closure was recorded through PR #6. The production website/Browser Use repository remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
 
 # Phase 6 issues
 
@@ -200,13 +168,11 @@ No Critical or High Phase 5 issue remains open. Phase 6 is **IN TEST / CLOSURE**
 
 Severity: Medium.
 
-Observed: the first Phase 6 CI policy used lifecycle values below the runtime's own accepted minimums, so the workflow was exercising invalid configuration rather than the lifecycle gate.
+Observed: the first Phase 6 CI policy used lifecycle values below the runtime's own accepted minimums.
 
-Underlying cause: the test harness shortened timeouts for CI without deriving them from the same validation bounds enforced by the runtime.
+Corrective action: changed accelerated CI policy to valid values (`70s` lease, `60s` idle, `30s` disconnect, `5s` startup, `1s` reaper) and made the reconnect fixture configuration-relative.
 
-Corrective action: changed accelerated CI policy to valid minimum-range values (`70s` lease, `60s` idle, `30s` disconnect, `5s` startup, `1s` reaper) and made the reconnect fixture derive its near-timeout timestamp from the configured disconnect grace.
-
-Evidence / RED history: early Phase 6 runs on heads including `8df07a543bbbfd76c6f85965aa7e7f2141c1821f` and `1cb3b1bfe3afd5cd97b8ca7f118cd539b613e8c4` were retained as RED history rather than relabelled. Exact corrected implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` later passed the dedicated Phase 6 gate.
+Evidence: exact corrected implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` later passed the dedicated Phase 6 gate.
 
 Status: **FIXED / CLOSED**.
 
@@ -214,13 +180,11 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: repository type/syntax and local/unit gates could pass, then image builds fail before application E2E because external registries or package mirrors were unavailable. Examples include Phase 6 run `33902499847`, job `101119604708`, where Composer/GitHub retrieval returned HTTP 504, and run `33902328749`, job `101119058078`, where Debian package retrieval failed after `deb.debian.org` name resolution failed. Other early runs in the same Phase 6 sequence encountered Docker Hub HTTP 429 throttling during image builds.
+Observed: repository-local gates could pass, then image builds fail because external registries or package mirrors were temporarily unavailable. Examples: run `33902499847`, job `101119604708` (Composer/GitHub HTTP 504), and run `33902328749`, job `101119058078` (Debian name-resolution failure). Early runs also encountered Docker Hub HTTP 429 throttling.
 
-Underlying cause: four authoritative workflows could simultaneously rebuild the same Docker images and depended on unauthenticated external registry/package availability; a single transient network failure immediately failed the workflow.
+Corrective action: all four then-authoritative workflows received a bounded three-attempt `docker compose build` retry with increasing delay. Persistent application, typecheck, unit, E2E or repeated build failures still fail the gate.
 
-Corrective action: all four authoritative workflows now wrap `docker compose build` in a bounded three-attempt retry with increasing delay. Persistent application, typecheck, unit, E2E or repeated build failures still fail the gate; the retry only protects against short-lived external retrieval faults.
-
-Evidence / RED history: failed runs remain in Actions history, including `33902499847`, `33902328749`, `33902328523`, `33902328488`, `33902328695`, `33902296862` and `33902296868`. The corrected exact implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` subsequently passed all four authoritative workflows on the same SHA.
+Evidence / RED history: failed runs including `33902499847`, `33902328749`, `33902328523`, `33902328488`, `33902328695`, `33902296862` and `33902296868` remain in Actions history.
 
 Status: **FIXED / CLOSED**.
 
@@ -228,13 +192,9 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: a CI-hardening attempt placed all four workflows in one shared Actions concurrency group. GitHub retained only one running and one pending item, so other inherited gates were cancelled rather than queued.
+Observed: a CI-hardening attempt put all required workflows in one shared Actions concurrency group, causing pending inherited gates to be cancelled rather than serialized.
 
-Underlying cause: the concurrency mechanism was incorrectly treated as a cross-workflow serialization queue, but its semantics intentionally replace/cancel pending work within the group.
-
-Corrective action: removed the shared cross-workflow concurrency group so all four required gates execute independently. Bounded Docker build retries were retained to address the actual registry/network failure mode without suppressing inherited verification.
-
-Evidence / RED history: the cancelled runs remain part of the Phase 6 audit trail and were not counted as passing evidence. Fresh runs were required after removing the concurrency group.
+Corrective action: removed the shared cross-workflow concurrency group and retained bounded build retries instead.
 
 Status: **FIXED / CLOSED**.
 
@@ -242,30 +202,15 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: the reaper captured live worker sessions before processing durable Laravel records. After successfully terminating one expired/closing tracked session, that worker ID still remained in the original snapshot and could be encountered again by the later orphan sweep.
+Corrective action: after successful tracked-session termination, the reaper removes that worker session ID from its in-memory snapshot before the orphan sweep.
 
-Underlying cause: the worker snapshot was not updated after same-pass tracked-session termination.
-
-Corrective action: after successful termination, the reaper immediately removes that worker session ID from its in-memory snapshot. The orphan sweep therefore only considers worker sessions that remain live/unaccounted-for after tracked-record processing.
-
-Evidence: the correction is included in exact implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540`, which passed all four authoritative workflows on the same SHA: Verified Through Phase 3 `33907235930`, Phase 4 Laravel Session API `33907235955`, Phase 5 Session Isolation `33907235924`, and Phase 6 Lifecycle Management `33907235859`. Each workflow also passed `scripts/typecheck.sh`.
+Evidence: exact implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540` passed Verified Through Phase 3 `33907235930`, Phase 4 `33907235955`, Phase 5 `33907235924` and Phase 6 `33907235859`.
 
 Status: **FIXED / CLOSED**.
 
-## Phase 6 technical gate status
+## Phase 6 closure
 
-The Phase 6 exit gate — **“Active browsers survive; abandoned browsers disappear automatically”** — is technically satisfied on implementation head `0da7b5b9b9da008d2a3d73ef8b96ce38f0212540`.
-
-Verified exact-head runs:
-
-- Verified Through Phase 3 run `33907235930` — SUCCESS;
-- Phase 4 Laravel Session API run `33907235955` — SUCCESS;
-- Phase 5 Session Isolation run `33907235924` — SUCCESS;
-- Phase 6 Lifecycle Management run `33907235859` — SUCCESS.
-
-All four workflows passed the repository-wide `scripts/typecheck.sh` gate. The Phase 6 workflow also passed lifecycle/restart reconciliation, lease/activity/heartbeat behavior, idle/disconnect expiry, explicit close, worker crash/orphan cleanup, residue checks and zero durable open-record checks.
-
-No Critical or High Phase 6 issue is known open. Final documented-head and promoted-`main` validation are still required before owner approval and Phase 6 completion.
+The Phase 6 exit gate — **“Active browsers survive; abandoned browsers disappear automatically”** — is satisfied. Final documented branch head `c708ee10016c2012fb400a25351f8afdf18e7847` passed runs `33909732417`, `33909732370`, `33909732414` and `33909732404`. PR #7 promoted it to `main` commit `20a81157554e70386be3291ee564fe39514a5041`, which passed runs `33910146825`, `33910146517`, `33910146434` and `33910146416`. Owner approval was recorded on 2026-09-04 through the Phase 6 closure sequence. Phase 6 is **GREEN / COMPLETE / APPROVED**.
 
 # Phase 7 issues
 
@@ -273,13 +218,13 @@ No Critical or High Phase 6 issue is known open. Final documented-head and promo
 
 Severity: High / Gate blocker.
 
-Observed: the approved Phase 6 runtime owned browser lifecycle and writer/session isolation, but launch destination was still supplied directly through the session launch request. There was no server-owned `tool_slug` -> configured profile resolution layer capable of proving the Phase 7 generic-tool gate.
+Observed: approved Phase 6 owned browser lifecycle and writer/session isolation, but the launch destination still came directly through the session launch request. There was no server-owned `tool_slug` -> configured profile resolution layer.
 
 Underlying cause: tool-profile configuration was deliberately deferred by the Blueprint until Phase 7.
 
-Corrective action: added `ToolProfileRegistry`, a configurable JSON profile source, server-side profile validation, enabled/disabled policy and profile-owned launch destination resolution. `SessionController` now resolves the signed writer/tool request through the registry before Chromium creation. Unknown and disabled profiles fail closed, and a caller cannot replace the configured destination.
+Corrective action: added `ToolProfileRegistry`, a configurable JSON profile source, server-side profile validation, enabled/disabled policy and profile-owned launch destination resolution. `SessionController` resolves the signed writer/tool request through the registry before Chromium creation. Unknown and disabled profiles fail closed, and a caller cannot replace the configured destination.
 
-Evidence: implementation commits beginning with `44148a1547e41c2504097fc67c6845d521a77012`, `72f693143a4f4faed7ffe5c48a610837830c93a5` and `5575b3afca29d91d7e8df20973541af4ab61ffd5`; exact implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed Phase 7 run `33926255054` and every inherited gate listed below.
+Evidence: implementation commits beginning with `44148a1547e41c2504097fc67c6845d521a77012`, `72f693143a4f4faed7ffe5c48a610837830c93a5` and `5575b3afca29d91d7e8df20973541af4ab61ffd5`; corrected implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed the complete authoritative gate set.
 
 Status: **FIXED / CLOSED**.
 
@@ -287,13 +232,13 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: the Phase 7 verification stack initially started the Phase 6 autonomous reaper while inherited regression fixtures were still creating sessions under their historical test sequencing. That made an inherited test environment race against legitimate Phase 6 orphan-cleanup behavior rather than testing the historical behavior in isolation.
+Observed: the initial Phase 7 verification stack started the Phase 6 autonomous reaper while inherited Phase 4/5 fixtures were still running their historical setup sequence.
 
-Underlying cause: the new Phase 7 workflow composed inherited suites without preserving the same reaper boundary used by their authoritative Phase 6 workflows.
+Underlying cause: the new Phase 7 workflow composed inherited suites without preserving the reaper boundary used by their authoritative lifecycle workflow.
 
-Corrective action: boot Phase 4/5 inherited regressions without the autonomous reaper, then start the reaper before the inherited Phase 6 lifecycle/restart regression. Production lifecycle behavior is not weakened; the reaper remains mandatory for the Phase 6 portion and final cleanup checks.
+Corrective action: run inherited Phase 4/5 regressions before starting the autonomous reaper, then make the reaper mandatory for the inherited Phase 6 lifecycle/restart regression and final cleanup checks. Production lifecycle behavior was not weakened.
 
-Evidence: corrective commit `7727cf0255f8edcf02ea4ed9e6a6792f3f8b9fdd`; exact implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed the Phase 4, Phase 5, Phase 6 and Phase 7 workflows.
+Evidence: corrective commit `7727cf0255f8edcf02ea4ed9e6a6792f3f8b9fdd` and later full-green Phase 7 heads.
 
 Status: **FIXED / CLOSED**.
 
@@ -301,28 +246,46 @@ Status: **FIXED / CLOSED**.
 
 Severity: Medium.
 
-Observed: inherited Phase 6 run `33919958668`, job `101175779193`, failed after `docker compose restart api`. Laravel became healthy, but an immediate idempotent API-to-worker session-status read briefly hit connection refusal and surfaced `WORKER_UNAVAILABLE`.
+Observed: inherited Phase 6 run `33919958668`, job `101175779193`, failed after `docker compose restart api`; an immediate idempotent API-to-worker session-status read briefly surfaced `WORKER_UNAVAILABLE`.
 
-Underlying cause: control-plane readiness and Docker-internal worker reachability can converge over a short interval after API restart, while `BrowserWorkerClient` treated the first connection-level failure on a read as final.
+Underlying cause: control-plane readiness and Docker-internal worker reachability can converge over a short interval after API restart, while `BrowserWorkerClient` treated the first connection-level read failure as final.
 
 Corrective action: added a bounded four-attempt, 100 ms connection retry only to idempotent worker reads (`health`, session list and session status). Session creation is intentionally not retried, preventing duplicate Chromium launch risk if a POST is processed but its response is lost. Permanent worker failure and worker HTTP errors still propagate normally. The inherited Phase 6 test was not weakened or skipped.
 
-Evidence / RED history: Phase 6 Lifecycle Management run `33919958668`, job `101175779193` — FAILURE. Corrected exact head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed Phase 6 run `33926255036` and all other authoritative workflows on the same SHA.
+Evidence / RED history: Phase 6 Lifecycle Management run `33919958668`, job `101175779193` — FAILURE. Corrected head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed Phase 6 run `33926255036` and all other authoritative workflows on the same SHA.
 
 Status: **FIXED / CLOSED**.
 
-## Phase 7 technical gate status
+## Phase 7 closure
 
-The Phase 7 exit gate — **“The runtime can launch a generic configured tool without Phrasly-specific branching in core infrastructure”** — is technically satisfied on implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266`.
+The Phase 7 exit gate — **“The runtime can launch a generic configured tool without Phrasly-specific branching in core infrastructure”** — is satisfied.
 
-Verified exact-head runs:
+Final documented Phase 7 branch head: `a6a17e43c1109533a1230c719b2524455837a8d4`.
 
-- Verified Through Phase 3 run `33926255081` — SUCCESS;
-- Phase 4 Laravel Session API run `33926255136` — SUCCESS;
-- Phase 5 Session Isolation run `33926255038` — SUCCESS;
-- Phase 6 Lifecycle Management run `33926255036` — SUCCESS;
-- Phase 7 Generic Tool Profiles run `33926255054` — SUCCESS.
+All five authoritative workflows passed on that exact branch SHA:
+
+- Verified Through Phase 3 — run `33926867078` — SUCCESS;
+- Phase 4 Laravel Session API — run `33926867092` — SUCCESS;
+- Phase 5 Session Isolation — run `33926867099` — SUCCESS;
+- Phase 6 Lifecycle Management — run `33926867114` — SUCCESS;
+- Phase 7 Generic Tool Profiles — run `33926867048` — SUCCESS.
+
+PR #9 promoted that exact tested head to standalone `main` commit `67281ba8815f2a407d4f2e6904ce1d7c38880d1d`.
+
+All five authoritative workflows passed again on the promoted `main` SHA:
+
+- Verified Through Phase 3 — run `33939565151` — SUCCESS;
+- Phase 4 Laravel Session API — run `33939565157` — SUCCESS;
+- Phase 5 Session Isolation — run `33939565153` — SUCCESS;
+- Phase 6 Lifecycle Management — run `33939565173` — SUCCESS;
+- Phase 7 Generic Tool Profiles — run `33939565154` — SUCCESS.
 
 The Phase 7 workflow proves configured generic launch, unknown/disabled profile rejection, caller launch-URL override rejection, same-writer/profile reuse, no Phrasly-specific reference in core runtime paths, no raw CDP exposure pattern, clean browser/profile teardown and zero durable open session records. All inherited Phase 1-6 behavioral gates remain active.
 
-No Critical or High Phase 7 issue is known open. Phase 7 remains **AWAITING OWNER APPROVAL**; Phase 8 must not start before explicit approval.
+The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
+
+Owner approval was explicitly received on **2026-09-05**. No Critical, High or gate-blocking Phase 7 issue remains open.
+
+Phase 7 is **GREEN / COMPLETE / APPROVED**.
+
+Phase 8 — Phrasly reference implementation — is **NOT STARTED** and must begin only on explicit later instruction.

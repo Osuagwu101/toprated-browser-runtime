@@ -14,7 +14,8 @@ Verified status:
 - Phase 4 — Laravel Session API & Ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 5 — writer/browser isolation and session ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 6 — lifecycle management: **GREEN / COMPLETE / APPROVED**.
-- Phase 7 — generic tool-profile framework: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
+- Phase 7 — generic tool-profile framework: **GREEN / COMPLETE / APPROVED**.
+- Phase 8 — Phrasly reference implementation: **NOT STARTED**.
 
 The existing Browser Use production path remains untouched.
 
@@ -54,7 +55,7 @@ The final Phase 6 audit is recorded in `docs/audits/phase-6.md`. `docs/audits/IS
 
 Owner approval for Phase 6 was received on 2026-09-04. Phase 6 is therefore **GREEN / COMPLETE / APPROVED**.
 
-## Phase 7 technical evidence
+## Phase 7 closure evidence
 
 Phase 7 was developed from approved Phase 6 standalone `main` commit `304753b3b7ac8c654adf263edbee8d56a9619148` on branch `phase7-tool-profiles`.
 
@@ -68,17 +69,27 @@ The implementation provides:
 - a generic worker launch primitive with no Phrasly-specific branch in core infrastructure; and
 - dedicated Phase 7 E2E coverage while preserving all inherited Phase 1-6 gates.
 
-The exact Phase 7 implementation head `d1d9269b7f1dda161ac1c72f9eae7884b4d59266` passed all five authoritative workflows on the same SHA:
+During inherited verification, Phase 6 run `33919958668` exposed a transient API-restart worker-read race. The runtime was fixed with bounded retry only for idempotent worker reads; session creation remains non-retried to avoid duplicate browser creation. The inherited lifecycle test was retained unchanged as a required gate and passed after the correction.
 
-- Verified Through Phase 3 — run `33926255081`;
-- Phase 4 Laravel Session API — run `33926255136`;
-- Phase 5 Session Isolation — run `33926255038`;
-- Phase 6 Lifecycle Management — run `33926255036`; and
-- Phase 7 Generic Tool Profiles — run `33926255054`.
+The exact final documented Phase 7 branch head `a6a17e43c1109533a1230c719b2524455837a8d4` passed all five authoritative workflows on the same SHA:
 
-During inherited verification, Phase 6 run `33919958668` exposed a transient API-restart worker-read race. The runtime was fixed with bounded retry only for idempotent worker reads; session creation remains non-retried to avoid duplicate browser creation. The inherited lifecycle test was retained unchanged as a required gate and passed on the corrected implementation head.
+- Verified Through Phase 3 — run `33926867078`;
+- Phase 4 Laravel Session API — run `33926867092`;
+- Phase 5 Session Isolation — run `33926867099`;
+- Phase 6 Lifecycle Management — run `33926867114`; and
+- Phase 7 Generic Tool Profiles — run `33926867048`.
 
-The Phase 7 audit is recorded in `docs/audits/phase-7.md`. `docs/audits/ISSUE_REGISTER.md` preserves the Phase 7 findings and corrective actions. Phase 7 is technically green but remains **AWAITING OWNER APPROVAL**; it is not marked COMPLETE until the owner explicitly approves it.
+PR #9 promoted that exact tested head to standalone `main` commit `67281ba8815f2a407d4f2e6904ce1d7c38880d1d`. The resulting `main` head passed all five authoritative workflows again:
+
+- Verified Through Phase 3 — run `33939565151`;
+- Phase 4 Laravel Session API — run `33939565157`;
+- Phase 5 Session Isolation — run `33939565153`;
+- Phase 6 Lifecycle Management — run `33939565173`; and
+- Phase 7 Generic Tool Profiles — run `33939565154`.
+
+The Phase 7 audit is recorded in `docs/audits/phase-7.md`; the final closure certificate is recorded in `docs/audits/phase-7-closure.md`. `docs/audits/ISSUE_REGISTER.md` preserves `SB-007-001` through `SB-007-003`, including the RED history and corrective actions; all Phase 7 findings are **FIXED / CLOSED**. The production website/Browser Use repository was rechecked after promotion and remained at `ea5d39b79d7c3fac9c004ae3dfd6b55ff75df084`.
+
+Owner approval for Phase 7 was received on 2026-09-05. Phase 7 is therefore **GREEN / COMPLETE / APPROVED**. Phase 8 is eligible to begin only on explicit instruction and remains **NOT STARTED**.
 
 ## Architecture
 
@@ -101,7 +112,7 @@ Current Phase 7 profile fields are deliberately minimal:
 
 `{writer_id}` is the supported launch template placeholder. Unknown/disabled profiles and unsupported profile fields/placeholders fail closed. The broader Blueprint profile concept — saved browser-state requirements, authenticated/logged-out/OTP indicators and optional navigation/validation rules — is introduced only as the later reference/adapter phases require it rather than being hardcoded into the common browser layer.
 
-Phrasly itself is not configured in Phase 7. The first real Phrasly profile and saved authenticated-state injection are Phase 8 work.
+Phrasly itself is not configured in Phase 7. The first real Phrasly profile and saved authenticated-state injection belong to Phase 8.
 
 ## Session API
 
@@ -164,17 +175,17 @@ Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNT
 
 ## Blueprint sequencing
 
-Not implemented or claimed in Phase 7:
+Phase 7 is closed. The following work is still not implemented or claimed:
 
 - Phase 8 Phrasly saved-state injection and authenticated reference implementation;
 - Phase 9 authentication-failure/admin-reauth behavior;
 - Phase 10 second-tool proof;
 - Phase 11 security hardening beyond the inherited controls already required for current gates;
 - Phase 12/18 empirical resource and concurrency measurements;
-- Phase 14 production-host deployment;
+- Phase 14 production-host deployment; and
 - Phase 15 production provider integration.
 
-These remain later Blueprint gates. Phase 8 must not start until Phase 7 receives explicit owner approval.
+Phase 8 is now eligible to start under the Blueprint sequence, but remains **NOT STARTED** until explicitly requested.
 
 ## Financial rule
 
