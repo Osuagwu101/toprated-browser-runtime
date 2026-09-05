@@ -1,0 +1,225 @@
+name: Phase 8 Phrasly Reference Implementation
+
+on:
+  push:
+    branches:
+      - phase8-phrasly-reference
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase8-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase8-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase8-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 5
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+  BROWSER_STATE_MAX_BYTES: 262144
+
+jobs:
+  phase8-phrasly-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Phase 8 static and unit gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          test -f api/app/Services/AuthorizedBrowserState.php
+          test -f browser-worker/src/browser-state.mjs
+          test -f browser-worker/test/auth-state-fixture.mjs
+          test -f tests/phase8-e2e.py
+          grep -F '"phrasly"' api/config/tool-profiles.json
+          grep -F '"browser_state"' api/config/tool-profiles.json
+          grep -F '"authentication"' api/config/tool-profiles.json
+          grep -F 'BROWSER_STATE_MAX_BYTES' .env.example docker-compose.yml api/config/browser.php
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config/browser.php; then
+            echo 'Phrasly-specific branching leaked into generic runtime core.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E 'authenticated_cookies|session_tokens|auth_headers|browser_state' api/app/Models api/database/migrations; then
+            echo 'Raw authorized browser state must not be persisted in durable session records.' >&2
+            exit 1
+          fi
+
+      - name: Build Phase 8 containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then
+              echo 'compose_build=pass'
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo 'compose_build=fail attempts=3' >&2
+              exit 1
+            fi
+            echo "compose_build_retry_in_seconds=${delay}" >&2
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
+
+      - name: Boot runtime without autonomous reaper for inherited Phase 4/5 regressions
+        run: docker compose up -d api browser-worker
+
+      - name: Wait for Phase 8 readiness
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase8-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase8-worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/phase8-health.json
+          cat /tmp/phase8-worker-health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/phase8-health.json'))
+          w=json.load(open('/tmp/phase8-worker-health.json'))
+          assert h['status']=='ok', h
+          assert h['browser_core']=='generic', h
+          assert h['tool_profiles']['configurationValid'] is True, h
+          assert h['tool_profiles']['statefulCount'] >= 2, h
+          assert h['tool_profiles']['authenticationRequiredCount'] >= 2, h
+          assert h['browser_state']['transport']=='signed-service-request-to-private-worker', h
+          assert h['browser_state']['persistence']=='session-ephemeral', h
+          assert h['browser_state']['maxBytes']==262144, h
+          assert w['status']=='ok', w
+          assert w['browserCore']=='generic', w
+          assert w['viewer']['rawCdpExposed'] is False, w
+          PY
+
+      - name: Preserve Phase 4 Laravel ownership regression
+        run: python3 tests/phase4-e2e.py
+
+      - name: Start same-origin isolation fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/isolation-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Preserve Phase 5 isolation regression
+        run: python3 tests/phase5-e2e.py
+
+      - name: Preserve Phase 7 generic profile regression
+        run: python3 tests/phase7-e2e.py
+
+      - name: Start Phase 8 authenticated-state fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/auth-state-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Phase 8 shared-state injection and auth-verification E2E
+        run: python3 tests/phase8-e2e.py
+
+      - name: Verify shared state is not durable or logged
+        run: |
+          set -euo pipefail
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $columns=$db->query("pragma table_info(browser_sessions)")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($columns as $column) {
+              $name=strtolower((string)$column["name"]);
+              foreach (["cookie","browser_state","session_token","auth_header"] as $forbidden) {
+                if (str_contains($name,$forbidden)) { fwrite(STDERR,"forbidden_persistent_column=".$name.PHP_EOL); exit(1); }
+              }
+            }
+            echo "browser_state_persistence=none\n";
+          '
+          docker compose logs --no-color api browser-worker >/tmp/phase8-runtime.log
+          for marker in 'must-never-be-submitted' 'shared-state-local' 'shared-state-session' 'should-not-cross'; do
+            if grep -F "$marker" /tmp/phase8-runtime.log; then
+              echo "sensitive_state_in_logs=$marker" >&2
+              exit 1
+            fi
+          done
+          echo 'sensitive_state_logs=clean'
+
+      - name: Start autonomous Phase 6 lifecycle reaper
+        run: |
+          set -euo pipefail
+          docker compose up -d lifecycle-reaper
+          for i in $(seq 1 20); do
+            if test -n "$(docker compose ps -q lifecycle-reaper)"; then
+              docker compose logs --no-color lifecycle-reaper > /tmp/phase8-reaper.log || true
+              if grep -F '"phase":6' /tmp/phase8-reaper.log; then
+                cat /tmp/phase8-reaper.log
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color lifecycle-reaper || true
+          exit 1
+
+      - name: Preserve Phase 6 lifecycle and restart regression
+        run: python3 tests/phase6-e2e.py
+
+      - name: Verify no browser process or profile residue
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
+          console.log('phase8_cleanup_scan=clean');
+          NODE
+
+      - name: Verify durable records are terminal
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "open_sessions=0\n";
+          '
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
