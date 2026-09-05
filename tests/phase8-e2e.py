@@ -8,7 +8,9 @@ import time
 from urllib import error, parse, request
 
 API = os.environ.get('API_BASE', 'http://127.0.0.1:18080')
+WORKER = os.environ.get('WORKER_BASE', 'http://127.0.0.1:18081')
 SERVICE_SECRET = os.environ['RUNTIME_SERVICE_AUTH_SECRET'].encode()
+WORKER_SECRET = os.environ['WORKER_CONTROL_SECRET']
 
 
 def signed(method, path, writer, obj=None):
@@ -32,6 +34,19 @@ def signed(method, path, writer, obj=None):
     req = request.Request(API + path, data=(body if obj is not None else None), headers=headers, method=method.upper())
     try:
         with request.urlopen(req, timeout=35) as response:
+            return response.status, json.loads(response.read() or b'{}')
+    except error.HTTPError as exc:
+        return exc.code, json.loads(exc.read() or b'{}')
+
+
+
+def worker_json(path, authenticated=True):
+    headers = {'accept': 'application/json'}
+    if authenticated:
+        headers['x-toprated-worker-secret'] = WORKER_SECRET
+    req = request.Request(WORKER + path, headers=headers, method='GET')
+    try:
+        with request.urlopen(req, timeout=20) as response:
             return response.status, json.loads(response.read() or b'{}')
     except error.HTTPError as exc:
         return exc.code, json.loads(exc.read() or b'{}')
@@ -139,6 +154,19 @@ assert status['title'] == 'PHASE8_AUTHENTICATED', status
 assert status['authentication']['required'] is True, status
 assert status['authentication']['verified'] is True, status
 
+
+# Authorized-state capture is available only through the private worker control plane.
+code, denied_export = worker_json(f"/browser/sessions/{payload['sid']}/authorized-state", authenticated=False)
+assert code == 401, code
+code, exported = worker_json(f"/browser/sessions/{payload['sid']}/authorized-state")
+assert code == 200, code
+assert isinstance(exported.get('authenticated_cookies'), list)
+assert any(cookie.get('name') == 'phase8-auth' and cookie.get('value') == 'ok' for cookie in exported['authenticated_cookies'])
+storage = exported.get('session_tokens', {}).get('storage', {})
+assert storage.get('localStorage', {}).get('phase8-local') == 'shared-state-local'
+assert storage.get('sessionStorage', {}).get('phase8-session') == 'shared-state-session'
+assert exported.get('auth_headers') == {}
+
 # A healthy existing writer/tool browser is reusable without retransmitting raw shared state.
 code, reused = signed('POST', '/api/sessions', writer, {
     'writer_id': writer,
@@ -181,4 +209,5 @@ print(json.dumps({
     'stateNotReturnedToWriter': True,
     'activeSessionReusableWithoutStateResend': True,
     'unverifiedStateGetsNoViewer': True,
+    'operatorStateExportControlProtected': True,
 }))
