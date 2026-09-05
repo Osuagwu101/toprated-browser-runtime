@@ -14,4 +14,5 @@ return [
     'session_disconnect_grace_seconds' => (int) env('SESSION_DISCONNECT_GRACE_SECONDS', 180),
     'session_startup_grace_seconds' => (int) env('SESSION_STARTUP_GRACE_SECONDS', 30),
     'session_reaper_interval_seconds' => (int) env('SESSION_REAPER_INTERVAL_SECONDS', 30),
+    'tool_profiles_path' => (string) env('TOOL_PROFILES_PATH', base_path('config/tool-profiles.json')),
 ];

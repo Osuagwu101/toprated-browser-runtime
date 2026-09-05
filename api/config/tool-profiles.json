@@ -1,0 +1,22 @@
+{
+  "generic-phase4-regression": {
+    "enabled": true,
+    "launch_url": "data:text/html,%3Ctitle%3EPhase%204%20Owned%3C/title%3E%3Ch1%3EOwned%3C/h1%3E"
+  },
+  "generic-phase5-isolation": {
+    "enabled": true,
+    "launch_url": "http://127.0.0.1:19090/?marker={writer_id}"
+  },
+  "generic-phase6-lifecycle": {
+    "enabled": true,
+    "launch_url": "data:text/html,%3C%21doctype%20html%3E%3Ctitle%3E{writer_id}%3C/title%3E%3Ch1%3E{writer_id}%3C/h1%3E"
+  },
+  "generic-phase7-smoke": {
+    "enabled": true,
+    "launch_url": "data:text/html,%3Ctitle%3EPhase%207%20Generic%20Configured%20Tool%3C/title%3E%3Ch1%3EGeneric%20Configured%20Tool%3C/h1%3E"
+  },
+  "generic-disabled": {
+    "enabled": false,
+    "launch_url": "data:text/html,%3Ctitle%3EDisabled%3C/title%3E"
+  }
+}

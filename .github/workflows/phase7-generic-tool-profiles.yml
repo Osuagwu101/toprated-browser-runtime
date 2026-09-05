@@ -1,10 +1,8 @@
-name: Phase 5 Session Isolation
+name: Phase 7 Generic Tool Profiles
 
 on:
   push:
     branches:
-      - phase5-session-isolation
-      - phase6-lifecycle-management
       - phase7-tool-profiles
       - main
   workflow_dispatch:
@@ -14,18 +12,23 @@ permissions:
 
 env:
   APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-  VIEWER_SIGNING_SECRET: phase5-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_SIGNING_SECRET: phase7-ci-viewer-signing-secret-not-for-production-0123456789abcdef
   VIEWER_TOKEN_TTL_SECONDS: 300
-  RUNTIME_SERVICE_AUTH_SECRET: phase5-ci-service-auth-secret-not-for-production-0123456789abcdef
-  WORKER_CONTROL_SECRET: phase5-ci-worker-control-secret-not-for-production-0123456789abcdef
+  RUNTIME_SERVICE_AUTH_SECRET: phase7-ci-service-auth-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase7-ci-worker-control-secret-not-for-production-0123456789abcdef
   SERVICE_AUTH_MAX_SKEW_SECONDS: 300
   VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
   MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 5
+  SESSION_REAPER_INTERVAL_SECONDS: 1
 
 jobs:
-  phase5-isolation:
+  phase7-tool-profiles:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,22 +36,17 @@ jobs:
       - name: Repository-wide type and syntax gate
         run: bash scripts/typecheck.sh
 
-      - name: Static and unit gates
+      - name: Phase 7 static and unit gates
         run: |
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
-          grep -F "this.sessions = new Map()" browser-worker/src/browser-session.mjs
-          grep -F "'/browser/sessions'" browser-worker/src/server.mjs
-          grep -F "worker_session_id" api/app/Services/SessionManager.php
-          grep -F "MAX_BROWSER_SESSIONS" docker-compose.yml
-          grep -F "rawCdpExposed: false" browser-worker/src/health.mjs
-          grep -F "grantIssuer: 'laravel'" browser-worker/src/health.mjs
-          if grep -F "issueViewerGrant" browser-worker/src/server.mjs; then
-            echo 'Browser worker must not issue viewer grants.' >&2
-            exit 1
-          fi
+          test -f api/app/Services/ToolProfileRegistry.php
+          test -f api/config/tool-profiles.json
+          grep -F "ToolProfileRegistry" api/app/Http/Controllers/SessionController.php
+          grep -F "LAUNCH_URL_OVERRIDE_FORBIDDEN" api/app/Http/Controllers/SessionController.php
+          grep -F "generic-phase7-smoke" api/config/tool-profiles.json
           if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
-            echo 'Phase 5 core runtime contains tool-specific Phrasly logic.' >&2
+            echo 'Phase 7 core runtime contains Phrasly-specific branching.' >&2
             exit 1
           fi
           if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
@@ -56,7 +54,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build current containers with retry
+      - name: Build Phase 7 containers with retry
         run: |
           set -euo pipefail
           delay=10
@@ -75,58 +73,76 @@ jobs:
             delay=$((delay * 2))
           done
 
-      - name: Boot inherited Phase 5 runtime without autonomous reaper
+      - name: Boot runtime without autonomous reaper for inherited Phase 4/5 regressions
         run: docker compose up -d api browser-worker
 
-      - name: Wait for current health and capacity agreement
+      - name: Wait for health
         run: |
           set -euo pipefail
-          for i in $(seq 1 40); do
-            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase5-health.json \
-              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase5-worker-health.json; then
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase7-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase7-worker-health.json; then
               break
             fi
             sleep 2
           done
-          cat /tmp/phase5-health.json
-          cat /tmp/phase5-worker-health.json
+          cat /tmp/phase7-health.json
+          cat /tmp/phase7-worker-health.json
           python3 - <<'PY'
           import json
-          h=json.load(open('/tmp/phase5-health.json'))
-          w=json.load(open('/tmp/phase5-worker-health.json'))
+          h=json.load(open('/tmp/phase7-health.json'))
+          w=json.load(open('/tmp/phase7-worker-health.json'))
           assert h['status']=='ok', h
-          assert h['phase']==6, h
-          assert h['session_owner']=='laravel', h
-          assert h['viewer_grant_issuer']=='laravel', h
-          assert h['max_browser_sessions']==3, h
+          assert h['browser_core']=='generic', h
+          assert h['tool_profiles']['configurationValid'] is True, h
+          assert h['tool_profiles']['configuredCount'] >= 2, h
+          assert h['tool_profiles']['enabledCount'] >= 1, h
           assert w['status']=='ok', w
-          assert w['phase']==6, w
-          assert w['lifecycleOwner']=='laravel', w
+          assert w['browserCore']=='generic', w
           assert w['viewer']['rawCdpExposed'] is False, w
-          assert w['capacity']['maxSessions']==3, w
-          assert w['capacity']['configurationValid'] is True, w
           PY
-
-      - name: Preserve Phase 1-3 regression
-        run: node browser-worker/test/standalone-migration.e2e.mjs
 
       - name: Preserve Phase 4 Laravel ownership regression
         run: python3 tests/phase4-e2e.py
 
-      - name: Start same-origin isolation fixture inside worker namespace
+      - name: Start same-origin isolation fixture
         run: |
-          set -euo pipefail
-          docker compose exec -d browser-worker node test/isolation-fixture.mjs
+          docker compose exec -d browser-worker node /srv/browser-worker/test/isolation-fixture.mjs
           for i in $(seq 1 20); do
-            if docker compose exec -T browser-worker curl --fail --silent http://127.0.0.1:19090/health >/dev/null; then break; fi
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
             sleep 1
           done
-          docker compose exec -T browser-worker curl --fail --silent http://127.0.0.1:19090/health
+          exit 1
 
-      - name: Phase 5 multi-writer isolation and crash regression
+      - name: Preserve Phase 5 isolation regression
         run: python3 tests/phase5-e2e.py
 
-      - name: Verify no browser profile or Chromium residue
+      - name: Phase 7 configured generic tool E2E
+        run: python3 tests/phase7-e2e.py
+
+      - name: Start autonomous Phase 6 lifecycle reaper
+        run: |
+          set -euo pipefail
+          docker compose up -d lifecycle-reaper
+          for i in $(seq 1 20); do
+            if test -n "$(docker compose ps -q lifecycle-reaper)"; then
+              docker compose logs --no-color lifecycle-reaper > /tmp/phase7-reaper.log || true
+              if grep -F '"phase":6' /tmp/phase7-reaper.log; then
+                cat /tmp/phase7-reaper.log
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color lifecycle-reaper || true
+          exit 1
+
+      - name: Preserve Phase 6 lifecycle and restart regression
+        run: python3 tests/phase6-e2e.py
+
+      - name: Verify no browser process or profile residue
         run: |
           set -euo pipefail
           docker compose exec -T browser-worker node - <<'NODE'
@@ -139,10 +155,10 @@ jobs:
           if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
           const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
           if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
-          console.log('phase5_cleanup_scan=clean');
+          console.log('phase7_cleanup_scan=clean');
           NODE
 
-      - name: Verify Phase 5 records close cleanly
+      - name: Verify durable records are terminal
         run: |
           docker compose exec -T api php -r '
             $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");

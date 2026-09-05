@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Services\BrowserWorkerClient;
 use App\Services\SessionManager;
+use App\Services\ToolProfileRegistry;
 use App\Services\ViewerGrantService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -11,12 +12,21 @@ use Throwable;
 
 final class HealthController
 {
-    public function show(BrowserWorkerClient $worker, ViewerGrantService $viewerGrants, SessionManager $sessions): JsonResponse
-    {
+    public function show(
+        BrowserWorkerClient $worker,
+        ViewerGrantService $viewerGrants,
+        SessionManager $sessions,
+        ToolProfileRegistry $toolProfiles,
+    ): JsonResponse {
         $databaseHealthy = false;
         $workerHealthy = false;
         $configurationHealthy = false;
         $lifecycle = null;
+        $toolProfileSummary = [
+            'configurationValid' => false,
+            'configuredCount' => 0,
+            'enabledCount' => 0,
+        ];
 
         try {
             DB::select('select 1');
@@ -42,10 +52,13 @@ final class HealthController
         try {
             $viewerGrants->assertConfigured();
             $lifecycle = $sessions->lifecycleConfiguration();
+            $toolProfileSummary = $toolProfiles->summary();
             $configurationHealthy = strlen((string) config('browser.service_auth_secret', '')) >= 32
                 && strlen((string) config('browser.worker_control_secret', '')) >= 32
                 && $configuredMaxSessions >= 2
-                && $configuredMaxSessions <= 15;
+                && $configuredMaxSessions <= 15
+                && ($toolProfileSummary['configurationValid'] ?? false) === true
+                && (int) ($toolProfileSummary['enabledCount'] ?? 0) >= 1;
         } catch (Throwable) {
             $configurationHealthy = false;
         }
@@ -65,6 +78,7 @@ final class HealthController
             'configuration' => $configurationHealthy ? 'ok' : 'invalid',
             'max_browser_sessions' => $configuredMaxSessions,
             'lifecycle' => $lifecycle,
+            'tool_profiles' => $toolProfileSummary,
         ], $healthy ? 200 : 503);
     }
 }

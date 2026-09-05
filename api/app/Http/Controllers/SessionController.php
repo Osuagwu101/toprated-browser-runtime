@@ -4,18 +4,22 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\RuntimeApiException;
 use App\Services\SessionManager;
+use App\Services\ToolProfileRegistry;
 use App\Services\ViewerGrantService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 final class SessionController
 {
-    public function store(Request $request, SessionManager $sessions, ViewerGrantService $viewerGrants): JsonResponse
-    {
+    public function store(
+        Request $request,
+        SessionManager $sessions,
+        ViewerGrantService $viewerGrants,
+        ToolProfileRegistry $toolProfiles,
+    ): JsonResponse {
         $writerId = $this->writerId($request);
         $bodyWriterId = trim((string) $request->input('writer_id', ''));
         $toolSlug = trim((string) $request->input('tool_slug', ''));
-        $launchUrl = trim((string) $request->input('launch_url', ''));
 
         if ($bodyWriterId === '' || ! hash_equals($writerId, $bodyWriterId)) {
             throw new RuntimeApiException('WRITER_ID_MISMATCH', 403, 'The signed writer identity does not match the launch request.');
@@ -23,13 +27,18 @@ final class SessionController
         if (strlen($writerId) > 191 || strlen($toolSlug) < 1 || strlen($toolSlug) > 191 || ! preg_match('/^[A-Za-z0-9._-]+$/', $toolSlug)) {
             throw new RuntimeApiException('INVALID_LAUNCH_REQUEST', 422, 'Writer and tool identifiers must be valid bounded identifiers.');
         }
-        if (! $this->validLaunchUrl($launchUrl)) {
-            throw new RuntimeApiException('INVALID_LAUNCH_URL', 422, 'Launch URL must use http, https, or data:text/html.');
+
+        $profile = $toolProfiles->resolve($toolSlug, $writerId);
+        if (array_key_exists('launch_url', $request->all())) {
+            $suppliedLaunchUrl = trim((string) $request->input('launch_url', ''));
+            if (! hash_equals($profile['launchUrl'], $suppliedLaunchUrl)) {
+                throw new RuntimeApiException('LAUNCH_URL_OVERRIDE_FORBIDDEN', 422, 'Launch URL is controlled by the configured tool profile.');
+            }
         }
 
         // Fail before Chromium is created if the viewer cannot issue a usable grant.
         $viewerGrants->assertConfigured();
-        $result = $sessions->create($writerId, $toolSlug, $launchUrl);
+        $result = $sessions->create($writerId, $toolSlug, $profile['launchUrl']);
 
         return response()->json($result, $result['reused'] ? 200 : 201);
     }
@@ -67,20 +76,5 @@ final class SessionController
         }
 
         return $writerId;
-    }
-
-    private function validLaunchUrl(string $value): bool
-    {
-        if ($value === '') {
-            return false;
-        }
-        if (str_starts_with(strtolower($value), 'data:text/html')) {
-            return true;
-        }
-        if (filter_var($value, FILTER_VALIDATE_URL) === false) {
-            return false;
-        }
-
-        return in_array(strtolower((string) parse_url($value, PHP_URL_SCHEME)), ['http', 'https'], true);
     }
 }
