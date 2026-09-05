@@ -18,9 +18,15 @@ final class SessionManager
     ) {
     }
 
-    public function create(string $writerId, string $toolSlug, string $launchUrl): array
-    {
-        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl): array {
+    public function create(
+        string $writerId,
+        string $toolSlug,
+        string $launchUrl,
+        ?array $browserState = null,
+        array $browserStatePolicy = [],
+        array $authentication = [],
+    ): array {
+        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication): array {
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -58,6 +64,10 @@ final class SessionManager
                 }
             }
 
+            if (($browserStatePolicy['required'] ?? false) === true && $browserState === null) {
+                throw new RuntimeApiException('BROWSER_STATE_REQUIRED', 422, 'This configured tool requires authorized shared browser state for a new session.');
+            }
+
             $open = $this->openSessionCount();
             $occupancy = $open + $this->untrackedWorkerSessionCount($workerSessions);
             if ($occupancy >= $maxSessions) {
@@ -77,9 +87,12 @@ final class SessionManager
             ]);
 
             try {
-                $workerStatus = $this->worker->start($launchUrl);
+                $workerStatus = $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication);
             } catch (RuntimeApiException $exception) {
-                $this->markFailed($session, 'WORKER_START_FAILED', 'The worker could not start the browser session.');
+                $failureCode = in_array($exception->errorCode, ['BROWSER_STATE_INVALID', 'BROWSER_STATE_TOO_LARGE', 'TOOL_AUTH_NOT_VERIFIED'], true)
+                    ? $exception->errorCode
+                    : 'WORKER_START_FAILED';
+                $this->markFailed($session, $failureCode, 'The worker could not create a verified browser session.');
                 throw $exception;
             }
 
@@ -89,6 +102,19 @@ final class SessionManager
             }
 
             $workerSessionId = $workerStatus['sessionId'];
+            if (($authentication['required'] ?? false) === true
+                && ($workerStatus['authentication']['verified'] ?? false) !== true) {
+                try {
+                    $stop = $this->worker->stop($workerSessionId);
+                    $this->assertCleanStop($stop, $workerSessionId);
+                } catch (RuntimeApiException $cleanupException) {
+                    $this->markFailed($session, 'WORKER_CLEANUP_FAILED', 'The unverified browser session could not be proven cleanly terminated.');
+                    throw $cleanupException;
+                }
+                $this->markFailed($session, 'TOOL_AUTH_NOT_VERIFIED', 'The configured tool did not reach its authenticated state.');
+                throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
+            }
+
             $alreadyTracked = BrowserSession::query()
                 ->where('worker_session_id', $workerSessionId)
                 ->where('id', '!=', $session->id)
