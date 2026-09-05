@@ -245,7 +245,7 @@ export class BrowserSessionController {
           }
           return result;
         };
-        return { localStorage: read(localStorage), sessionStorage: read(sessionStorage) };
+        return { url: String(location.href || ''), localStorage: read(localStorage), sessionStorage: read(sessionStorage) };
       })()`,
       returnByValue: true,
     }, 10000);
@@ -253,8 +253,15 @@ export class BrowserSessionController {
     if (!storage || typeof storage !== 'object' || Array.isArray(storage)) {
       throw Object.assign(new Error('Chromium did not return exportable browser storage.'), { statusCode: 502 });
     }
+    let currentHost = '';
+    try { currentHost = new URL(String(storage.url || session.url || '')).hostname.toLowerCase().replace(/^\.+|\.+$/g, ''); } catch {}
+    if (!currentHost) throw Object.assign(new Error('Browser is not on an exportable HTTP(S) tool origin.'), { statusCode: 409 });
+    const scopedCookies = cookies.filter((cookie) => {
+      const domain = String(cookie.domain || currentHost).toLowerCase().replace(/^\.+|\.+$/g, '');
+      return domain === currentHost || currentHost.endsWith(`.${domain}`) || domain.endsWith(`.${currentHost}`);
+    });
     return {
-      authenticated_cookies: cookies,
+      authenticated_cookies: scopedCookies,
       session_tokens: {
         captured_at: new Date().toISOString(),
         storage: {
