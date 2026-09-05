@@ -181,3 +181,20 @@ Authoritative workflow evidence on that exact SHA:
 - Phase 8 Phrasly Reference Implementation — run `33945655774` — **SUCCESS**.
 
 The Phase 8 workflow proves that state export fails without the private worker-control secret and succeeds only on the authenticated private control plane. The actual live Phrasly run remains required before the Blueprint exit gate can be declared technically green.
+
+## CI incident retained — final documentation head
+
+Final documentation head `c6285ac3e74dbbdc1c32ceab7c6c18a6ef5bd15e` initially produced a red Phase 8 workflow run `33945908128` (attempt 1). The deterministic Phase 8 state-injection/export checks passed, but the inherited Phase 6 E2E received HTTP 500 while directly launching its untracked-worker cleanup fixture. The failure is retained here and was not hidden or used to weaken the Phase 6 gate.
+
+The same workflow job was rerun unchanged as attempt 2. Every step passed, including the exact Phase 6 lifecycle/restart regression, browser/profile residue scan, durable-record terminal check, and teardown. Together with the already-green standalone Phase 3–7 workflows on the same SHA, this demonstrates a transient runner/Chromium launch incident rather than a reproducible amendment regression.
+
+Evidence on `c6285ac3e74dbbdc1c32ceab7c6c18a6ef5bd15e`:
+
+- Verified Through Phase 3 — run `33945908151` — **SUCCESS**;
+- Phase 4 Laravel Session API — run `33945908140` — **SUCCESS**;
+- Phase 5 Session Isolation — run `33945908136` — **SUCCESS**;
+- Phase 6 Lifecycle Management — run `33945908134` — **SUCCESS**;
+- Phase 7 Generic Tool Profiles — run `33945908168` — **SUCCESS**; and
+- Phase 8 Phrasly Reference Implementation — run `33945908128`, attempt 2 — **SUCCESS**.
+
+This evidence clears the deterministic regression concern. It does not satisfy the live Phrasly exit gate.
