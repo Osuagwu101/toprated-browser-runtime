@@ -45,6 +45,9 @@ jobs:
           test -f browser-worker/src/browser-state.mjs
           test -f browser-worker/test/auth-state-fixture.mjs
           test -f tests/phase8-e2e.py
+          test -f scripts/phase8-admin-auth-harness.py
+          grep -F 'authorized-state' browser-worker/src/server.mjs tests/phase8-e2e.py
+          grep -F 'phrasly-admin-bootstrap' api/config/tool-profiles.json scripts/phase8-admin-auth-harness.py
           grep -F '"phrasly"' api/config/tool-profiles.json
           grep -F '"browser_state"' api/config/tool-profiles.json
           grep -F '"authentication"' api/config/tool-profiles.json
