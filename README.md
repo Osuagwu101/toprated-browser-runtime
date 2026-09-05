@@ -118,6 +118,8 @@ The dedicated Phase 8 E2E uses a deterministic authenticated-state fixture to pr
 
 This is mechanism evidence, not the final Blueprint gate. Phase 8 remains **IN TEST** until `scripts/phase8-phrasly-acceptance.py` is run with a real currently-authorized Phrasly shared state and proves that one self-hosted Chromium reaches authenticated Phrasly. Raw shared state must never be pasted into chat, committed to Git, or stored in ordinary logs.
 
+Because the connected cloud browser could not pass Phrasly's Cloudflare verification, the owner approved a temporary operator-only authentication harness on 2026-09-05. `scripts/phase8-admin-auth-harness.py` opens Phrasly in the self-hosted Chromium, stores its one-time viewer link in a permission-restricted local file, allows the owner to complete verification directly, captures only the active Phrasly origin's authorized state over the private worker control plane, immediately proves that state in a fresh Chromium session, and removes temporary artifacts. The harness requires runtime operator secrets that writers do not possess and does not implement the broader Phase 9 re-authentication experience.
+
 The current Phase 8 audit is recorded in `docs/audits/phase-8.md`.
 
 ## Architecture
