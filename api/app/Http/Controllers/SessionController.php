@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\RuntimeApiException;
+use App\Services\AuthorizedBrowserState;
 use App\Services\SessionManager;
 use App\Services\ToolProfileRegistry;
 use App\Services\ViewerGrantService;
@@ -16,10 +17,12 @@ final class SessionController
         SessionManager $sessions,
         ViewerGrantService $viewerGrants,
         ToolProfileRegistry $toolProfiles,
+        AuthorizedBrowserState $authorizedBrowserState,
     ): JsonResponse {
         $writerId = $this->writerId($request);
         $bodyWriterId = trim((string) $request->input('writer_id', ''));
         $toolSlug = trim((string) $request->input('tool_slug', ''));
+        $body = $request->all();
 
         if ($bodyWriterId === '' || ! hash_equals($writerId, $bodyWriterId)) {
             throw new RuntimeApiException('WRITER_ID_MISMATCH', 403, 'The signed writer identity does not match the launch request.');
@@ -28,17 +31,39 @@ final class SessionController
             throw new RuntimeApiException('INVALID_LAUNCH_REQUEST', 422, 'Writer and tool identifiers must be valid bounded identifiers.');
         }
 
+        foreach (['username', 'password', 'otp', 'otp_code', 'verification_code', 'credentials', 'tool_password', 'admin_password'] as $credentialField) {
+            if (array_key_exists($credentialField, $body)) {
+                throw new RuntimeApiException('WRITER_CREDENTIALS_FORBIDDEN', 422, 'Writer launch requests must not contain tool credentials or verification codes.');
+            }
+        }
+
         $profile = $toolProfiles->resolve($toolSlug, $writerId);
-        if (array_key_exists('launch_url', $request->all())) {
+        if (array_key_exists('launch_url', $body)) {
             $suppliedLaunchUrl = trim((string) $request->input('launch_url', ''));
             if (! hash_equals($profile['launchUrl'], $suppliedLaunchUrl)) {
                 throw new RuntimeApiException('LAUNCH_URL_OVERRIDE_FORBIDDEN', 422, 'Launch URL is controlled by the configured tool profile.');
             }
         }
 
+        $browserState = null;
+        if (array_key_exists('browser_state', $body)) {
+            $browserState = $authorizedBrowserState->normalize(
+                $body['browser_state'],
+                $profile['browserState'],
+                $profile['launchUrl'],
+            );
+        }
+
         // Fail before Chromium is created if the viewer cannot issue a usable grant.
         $viewerGrants->assertConfigured();
-        $result = $sessions->create($writerId, $toolSlug, $profile['launchUrl']);
+        $result = $sessions->create(
+            $writerId,
+            $toolSlug,
+            $profile['launchUrl'],
+            $browserState,
+            $profile['browserState'],
+            $profile['authentication'],
+        );
 
         return response()->json($result, $result['reused'] ? 200 : 201);
     }
