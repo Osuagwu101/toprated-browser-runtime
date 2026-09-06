@@ -80,6 +80,43 @@
       "timeout_seconds": 15
     }
   },
+  "stealthwriter": {
+    "enabled": true,
+    "launch_url": "https://stealthwriter.ai/dashboard",
+    "browser_state": {
+      "required": true,
+      "allowed_hosts": [
+        "stealthwriter.ai"
+      ]
+    },
+    "authentication": {
+      "required": true,
+      "url_contains_any": [
+        "/dashboard"
+      ],
+      "timeout_seconds": 15
+    }
+  },
+  "chatgpt": {
+    "enabled": true,
+    "launch_url": "https://chatgpt.com/",
+    "browser_state": {
+      "required": true,
+      "allowed_hosts": [
+        "chatgpt.com",
+        "openai.com"
+      ]
+    },
+    "authentication": {
+      "required": true,
+      "selectors_any": [
+        "[data-testid=\"accounts-profile-button\"]",
+        "[data-testid=\"profile-button\"]",
+        "div[aria-label=\"Open profile menu\"]"
+      ],
+      "timeout_seconds": 20
+    }
+  },
   "generic-disabled": {
     "enabled": false,
     "launch_url": "data:text/html,%3Ctitle%3EDisabled%3C/title%3E"
