@@ -3,6 +3,7 @@
 use App\Http\Controllers\CapacityController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\SessionController;
+use App\Http\Controllers\ToolAuthController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', [HealthController::class, 'show']);
@@ -15,4 +16,9 @@ Route::middleware('service.auth')->group(function (): void {
     Route::post('/sessions/{session}/activity', [SessionController::class, 'activity']);
     Route::post('/sessions/{session}/viewer-grant', [SessionController::class, 'viewerGrant']);
     Route::delete('/sessions/{session}', [SessionController::class, 'destroy']);
+});
+
+Route::middleware('operator.auth')->prefix('/operator')->group(function (): void {
+    Route::get('/tool-auth/{tool}', [ToolAuthController::class, 'show']);
+    Route::post('/tool-auth/{tool}/restore', [ToolAuthController::class, 'restore']);
 });
