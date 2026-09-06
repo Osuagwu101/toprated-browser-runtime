@@ -175,6 +175,9 @@ jobs:
           docker compose logs --no-color lifecycle-reaper || true
           exit 1
 
+      - name: Stress orphan creation against active reaper
+        run: python3 tests/phase6-orphan-create-race.py
+
       - name: Preserve Phase 6 lifecycle and restart regression
         run: |
           set +e
