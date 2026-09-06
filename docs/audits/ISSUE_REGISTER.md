@@ -290,16 +290,15 @@ Phase 7 is **GREEN / COMPLETE / APPROVED**.
 
 Phase 8 — Phrasly reference implementation — is **NOT STARTED** and must begin only on explicit later instruction.
 
-
 # Phase 8 issues
 
 ### SB-008-001 through SB-008-005 — Phrasly profile, shared-state injection, pre-viewer authentication verification, ephemeral state handling and live-proof requirement
 
 Severity: High / gate blockers.
 
-Underlying causes and corrections are recorded in `docs/audits/phase-8.md`. The deterministic mechanism is CI-verified; the real Phrasly gate remains pending owner-operated authentication.
+Underlying causes and corrections are recorded in `docs/audits/phase-8.md`. The deterministic mechanism was CI-verified and the real Phrasly gate was subsequently owner-operated and live-verified.
 
-Status: **FIXED / LIVE-VERIFIED; FINAL EXACT-HEAD CI PENDING**.
+Status: **FIXED / LIVE-VERIFIED / CLOSED**.
 
 ### SB-008-006 — Cloud browser could not establish the real Phrasly state because Cloudflare verification did not complete
 
@@ -313,10 +312,9 @@ Owner-approved amendment: on 2026-09-05 the owner approved a temporary operator-
 
 Security controls: runtime operator service and worker-control secrets are required; writers receive neither secret nor raw captured state; the state-export route rejects unauthenticated calls; no password or OTP is accepted by the harness; captured state is not printed or durably stored.
 
-Evidence: exact implementation head `57182a5f4cbcc654981fda7bbf565ad7b8d7ae03` passed all six authoritative workflows: Verified Through Phase 3 `33945655810`, Phase 4 `33945655788`, Phase 5 `33945655813`, Phase 6 `33945655770`, Phase 7 `33945655773`, and Phase 8 `33945655774`.
+Evidence: exact implementation head `57182a5f4cbcc654981fda7bbf565ad7b8d7ae03` passed all six authoritative workflows: Verified Through Phase 3 `33945655810`, Phase 4 `33945655788`, Phase 5 `33945655813`, Phase 6 `33945655770`, Phase 7 `33945655773`, and Phase 8 `33945655774`. The owner-operated live gate later passed at `https://phrasly.ai/dashboard`.
 
-Status: **IMPLEMENTED / CI-VERIFIED; OWNER-OPERATED LIVE LOGIN STILL REQUIRED**.
-
+Status: **FIXED / LIVE-VERIFIED / CLOSED**.
 
 ### SB-008-007 — Acceptance harness ignored the configured worker origin
 
@@ -328,23 +326,45 @@ Underlying cause: `scripts/phase8-phrasly-acceptance.py` accepted `WORKER_BASE` 
 
 Corrective action: commit `8a5a6ac35c2449d0e0ec77935077969d8755f0f9` preserves the signed viewer path/query/token and substitutes only the configured absolute worker origin. The corrected harness produced a live `PASS` at `https://phrasly.ai/dashboard`, with authentication verified before viewer grant and no raw state printed.
 
-Status: **FIXED / LIVE-VERIFIED**.
+Status: **FIXED / LIVE-VERIFIED / CLOSED**.
 
-## Phase 8 technical gate
-
-On 2026-09-06, the corrected acceptance harness used the active production-managed shared state to launch a fresh self-hosted Chromium. It returned `PASS` for Phrasly at `https://phrasly.ai/dashboard`, confirmed authenticated state, confirmed viewer access occurred after verification, and printed no raw state.
-
-The Master Blueprint v1.1 Phase 8 exit gate is technically satisfied. Owner approval was received on 2026-09-06. PR #11 was merged to `main` at `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`; all six authoritative workflows passed on that exact promoted SHA. Phase 8 is **GREEN / COMPLETE / APPROVED**. Phase 9 remains **NOT STARTED**.
-
-
-### SB-008-008 — Final completion-ledger validation exposed Phase 7 composite worker-state leakage
+### SB-008-008 — Session-creation/reaper race exposed by final Phase 7 composite validation
 
 Severity: High / inherited-regression blocker.
 
-Observed: on final `main` completion-ledger head `12060854c351232b9ed313e45c337030208af2a4`, Phase 7 Generic Tool Profiles run `34007830712` failed on attempts 1 and 2. In both attempts, repository syntax, Phase 7 static/unit gates, Phase 4 ownership, Phase 5 isolation and the Phase 7 configured-tool E2E passed. The inherited Phase 6 suite then received HTTP 500 instead of 201 while launching its untracked-worker cleanup fixture. Teardown still passed. The other five authoritative workflows passed on the same SHA.
+Observed: on final `main` completion-ledger head `12060854c351232b9ed313e45c337030208af2a4`, Phase 7 Generic Tool Profiles run `34007830712` failed on attempts 1 and 2. In both attempts, repository syntax, Phase 7 static/unit gates, Phase 4 ownership, Phase 5 isolation and the Phase 7 configured-tool E2E passed. The unchanged inherited Phase 6 suite then received HTTP 500 instead of 201 while launching its untracked-worker cleanup fixture. Teardown still passed. The standalone Phase 6 workflow passed on the same SHA.
 
-Underlying cause: the Phase 7 workflow composed Phase 4, Phase 5 and Phase 7 browser suites and then immediately ran the full inherited Phase 6 lifecycle suite against the same long-lived worker process. The standalone Phase 6 workflow passed on the same SHA, isolating the failure to cumulative cross-suite Chromium worker state rather than the Phase 6 lifecycle behavior itself.
+Failure-history note: the first cleanup correction required a private worker inventory assertion and browser-worker restart before inherited Phase 6. An implementation of that boundary initially used the wrong worker-control request header. Commit `58329bb80a7d5e675c39ca45142b1a3645340744` corrected the header to `x-toprated-worker-secret`; on that exact `main` head the five other authoritative workflows passed, while Phase 7 run `34011309486` still failed later inside the inherited Phase 6 orphan-worker fixture. This proved the header defect was real but not the root cause of SB-008-008.
 
-Corrective action: the Phase 7 workflow now requires the private worker session inventory to report zero active and zero starting sessions after the Phase 7 E2E, restarts only the browser-worker container to re-establish the clean process boundary used by the standalone Phase 6 gate, waits for worker health, and then starts the reaper and executes the unchanged inherited Phase 6 E2E. The zero-session assertion prevents the restart from concealing a tracked-session cleanup defect.
+Initial diagnosis: because standalone Phase 6 passed while the composite failed after earlier browser suites, the issue was first described broadly as cumulative composite worker-state leakage. That diagnosis was intentionally not treated as closure evidence.
 
-Status: **FIX IMPLEMENTED — EXACT-HEAD CI VERIFICATION REQUIRED**.
+Underlying cause: direct worker session creation and reaper inventory were not atomic with respect to each other. A `POST /browser/sessions` could make a newly created session visible to `GET /browser/sessions` while the create request was still completing. With the autonomous lifecycle reaper scanning every second, the reaper could classify that direct worker session as an untracked orphan and delete it before the POST completed, producing the intermittent HTTP 500 instead of the required 201.
+
+Corrective action: worker session inventory now waits for in-flight session creation to settle before returning a set that the reaper may classify. The same creation barrier applies to the legacy `/browser/start` alias so the race is not left on a second creation path. The Phase 7 workflow still asserts zero active and zero starting worker sessions before restarting the worker for inherited Phase 6, then starts the autonomous reaper and executes the unchanged inherited lifecycle suite. No lifecycle assertion, ownership check, security rule or cleanup requirement was disabled or weakened.
+
+Permanent regression: `tests/phase6-orphan-create-race.py` creates and reaps 12 direct orphan worker sessions consecutively against the active one-second lifecycle reaper before the unchanged inherited `tests/phase6-e2e.py` suite runs.
+
+Stress evidence: exact branch head `9122e552744dea03c5662031646c30f47758af2d` passed three consecutive executions of Phase 7 workflow run `34017793483`, including job executions `101444599224`, `101445085357` and `101445524244`. Each passed the 12-iteration race stress gate, the unchanged inherited Phase 6 regression, browser/profile residue checks and teardown.
+
+Cleaned-branch evidence: head `653153906c3569f2f13bd733ff9aaf7d2ea2b1c3` removed diagnostic-only scaffolding while retaining the runtime fix, permanent race regression and zero-session/restart boundary. Phase 7 run `34018317456` passed before promotion.
+
+Exact technical `main` evidence on the same SHA `653153906c3569f2f13bd733ff9aaf7d2ea2b1c3`:
+
+- Verified Through Phase 3 — run `34018473665` — SUCCESS;
+- Phase 4 Laravel Session API — run `34018473673` — SUCCESS;
+- Phase 5 Session Isolation — run `34018473708` — SUCCESS;
+- Phase 6 Lifecycle Management — run `34018473693` — SUCCESS;
+- Phase 7 Generic Tool Profiles — run `34018473683` — SUCCESS;
+- Phase 8 Phrasly Reference Implementation — run `34018473674` — SUCCESS.
+
+Status: **FIXED / CLOSED**. Final documentation-head exact-CI validation is still required by the repository engineering contract before the Phase 8 closure record becomes effective, but no SB-008-008 runtime defect remains open.
+
+## Phase 8 closure
+
+On 2026-09-06, the corrected acceptance harness used the active production-managed shared state to launch a fresh self-hosted Chromium. It returned `PASS` for Phrasly at `https://phrasly.ai/dashboard`, confirmed authenticated state, confirmed viewer access occurred after verification, and printed no raw state.
+
+The Master Blueprint v1.1 Phase 8 exit gate — **“One self-hosted Chromium reaches authenticated Phrasly from shared state”** — is satisfied. Owner approval was received on 2026-09-06. PR #11 was merged to `main` at `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`; all six authoritative workflows passed on that exact promoted SHA.
+
+The later final-ledger regression SB-008-008 is now fixed, stress-tested and green on corrected technical `main` head `653153906c3569f2f13bd733ff9aaf7d2ea2b1c3`, where all six authoritative workflows passed. The temporary fix-branch workflow trigger is removed in the final closure change while the permanent race regression remains active.
+
+The owner explicitly instructed this final verification/closure sequence to complete Phase 8 and unlock Phase 9. This closure becomes effective once all six authoritative workflows pass on the final `main` head containing the closure documentation and workflow cleanup. At that point Phase 8 is **GREEN / COMPLETE / APPROVED**, and Phase 9 — Authentication-Failure Behaviour — is **UNLOCKED / NOT STARTED**.
