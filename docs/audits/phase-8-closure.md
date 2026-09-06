@@ -1,6 +1,6 @@
 # Phase 8 Completion Certificate — Phrasly Reference Implementation
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
+Status: **GREEN / COMPLETE / APPROVED**
 
 Blueprint: **Master Blueprint v1.1**
 
@@ -92,6 +92,19 @@ These are future-phase responsibilities and do not invalidate the Phase 8 exit g
 
 The Master Blueprint v1.1 Phase 8 technical exit gate is satisfied.
 
-Phase 8 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
+Phase 8 is **GREEN / COMPLETE / APPROVED**.
 
-PR #11 remains unmerged. Phase 9 is **NOT STARTED**. Phase 8 must not be marked `COMPLETE`, and PR #11 must not be merged, until the owner explicitly approves this certificate. After approval, promote through PR #11, run all six authoritative workflows on the resulting `main` SHA, record that promotion evidence, and only then finalize Phase 8 as **COMPLETE**.
+The owner explicitly approved Phase 8 on **2026-09-06**. PR #11 was then merged without changing the approved branch head.
+
+Promoted `main` head: `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`.
+
+All six authoritative workflows passed on that resulting `main` SHA, attempt 1:
+
+- Verified Through Phase 3 — run `34007646004` — **SUCCESS**;
+- Phase 4 Laravel Session API — run `34007645971` — **SUCCESS**;
+- Phase 5 Session Isolation — run `34007646039` — **SUCCESS**;
+- Phase 6 Lifecycle Management — run `34007646000` — **SUCCESS**;
+- Phase 7 Generic Tool Profiles — run `34007646152` — **SUCCESS**; and
+- Phase 8 Phrasly Reference Implementation — run `34007646109` — **SUCCESS**.
+
+Phase 8 is therefore **GREEN / COMPLETE / APPROVED**. Phase 9 — Authentication-Failure Behaviour — is now eligible under the Blueprint sequence but remains **NOT STARTED** until explicit instruction.
