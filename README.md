@@ -15,7 +15,7 @@ Verified status:
 - Phase 5 — writer/browser isolation and session ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 6 — lifecycle management: **GREEN / COMPLETE / APPROVED**.
 - Phase 7 — generic tool-profile framework: **GREEN / COMPLETE / APPROVED**.
-- Phase 8 — Phrasly reference implementation: **IN TEST — REAL PHRASLY SHARED-STATE PROOF PENDING**.
+- Phase 8 — Phrasly reference implementation: **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**.
 
 The existing Browser Use production path remains untouched.
 
@@ -116,7 +116,7 @@ The exact first complete implementation head `edd8306f27d1d9302da1f783a5fd1fef35
 
 The dedicated Phase 8 E2E uses a deterministic authenticated-state fixture to prove cookies, `localStorage` and `sessionStorage` are injected before page scripts, authentication is verified before viewer access, invalid state receives no viewer, state is not returned to the writer, state markers are absent from runtime logs, and failed/unverified browsers leave no residue.
 
-This is mechanism evidence, not the final Blueprint gate. Phase 8 remains **IN TEST** until `scripts/phase8-phrasly-acceptance.py` is run with a real currently-authorized Phrasly shared state and proves that one self-hosted Chromium reaches authenticated Phrasly. Raw shared state must never be pasted into chat, committed to Git, or stored in ordinary logs.
+On 2026-09-06, `scripts/phase8-phrasly-acceptance.py` used the active production-managed shared state to prove that a fresh self-hosted Chromium reached authenticated Phrasly at `https://phrasly.ai/dashboard`. Viewer access was issued only after authentication verification, and raw state was not printed. The Blueprint technical exit gate is satisfied; Phase 8 awaits final exact-head CI evidence and explicit owner approval.
 
 Because the connected cloud browser could not pass Phrasly's Cloudflare verification, the owner approved a temporary operator-only authentication harness on 2026-09-05. `scripts/phase8-admin-auth-harness.py` opens Phrasly in the self-hosted Chromium, stores its one-time viewer link in a permission-restricted local file, allows the owner to complete verification directly, captures only the active Phrasly origin's authorized state over the private worker control plane, immediately proves that state in a fresh Chromium session, and removes temporary artifacts. The harness requires runtime operator secrets that writers do not possess and does not implement the broader Phase 9 re-authentication experience.
 
@@ -215,7 +215,7 @@ Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNT
 
 ## Blueprint sequencing
 
-Phase 8 is **IN TEST**. The following work remains later-phase work and is not claimed:
+Phase 8 is **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**. The following work remains later-phase work and is not claimed:
 
 - Phase 9 authentication-failure/admin-reauth behavior;
 - Phase 10 second-tool proof;
@@ -224,7 +224,7 @@ Phase 8 is **IN TEST**. The following work remains later-phase work and is not c
 - Phase 14 production-host deployment;
 - Phase 15 production provider integration.
 
-Phase 9 must not start until the Phase 8 exit gate is demonstrated with real Phrasly state and the owner subsequently approves Phase 8.
+The Phase 8 live Phrasly exit gate is demonstrated. Phase 9 must not start until the owner explicitly approves Phase 8.
 
 ## Financial rule
 
