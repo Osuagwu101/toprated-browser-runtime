@@ -48,12 +48,44 @@ The audit and central issue register retain the material red history:
 - The first encrypted-state acceptance attempt correctly rejected a Windows bind-mounted state file that was not mode `0600`.
 - The next attempt exposed SB-008-007: the acceptance harness accepted but ignored `WORKER_BASE`, so an ephemeral test container addressed its own loopback rather than the Windows-hosted worker.
 - Commit `8a5a6ac35c2449d0e0ec77935077969d8755f0f9` corrected only the harness origin selection. The corrected live run passed without weakening authentication, viewer authorization, state handling or runtime behavior.
+- Final ledger validation exposed SB-008-008: Phase 7 composite run `34007830712` failed twice in the unchanged inherited Phase 6 orphan-worker fixture with HTTP 500 instead of 201, while standalone Phase 6 passed on the same head.
 
 Material red-run history recorded: **YES**.
 
+## SB-008-008 final resolution
+
+The final diagnosis replaced the earlier broad "composite worker-state leakage" theory with the concrete creation/reaper race proved by the worker lifecycle code and stress verification.
+
+A direct `POST /browser/sessions` could finish Chromium startup far enough for the session to appear in the worker's public inventory while the create request was still completing. With the autonomous lifecycle reaper running every second, the reaper could read that just-created direct worker session as untracked and delete it before the POST completed. The inherited Phase 6 orphan fixture would then intermittently receive HTTP 500 instead of its required 201.
+
+The correction makes worker session inventory atomic with respect to session creation: lifecycle inventory reads wait for in-flight creation to settle before returning a session set that the reaper may classify. The same creation boundary is applied to the legacy start alias so there is not a second form of the race. No lifecycle assertion, authorization check, cleanup requirement or inherited regression was disabled or weakened.
+
+Permanent regression coverage was added in `tests/phase6-orphan-create-race.py`. The Phase 7 composite now starts the autonomous one-second reaper, creates and reaps 12 direct orphan worker sessions consecutively, then executes the unchanged inherited `tests/phase6-e2e.py` lifecycle/restart regression and final residue checks.
+
+Stress verification on exact branch head `9122e552744dea03c5662031646c30f47758af2d` passed three consecutive executions of the same Phase 7 workflow run `34017793483`, including job executions `101444599224`, `101445085357` and `101445524244`. Each execution passed the 12-iteration race stress gate, the unchanged inherited Phase 6 suite, browser/profile residue checks and teardown.
+
+The cleaned branch head `653153906c3569f2f13bd733ff9aaf7d2ea2b1c3` removed diagnostic-only scaffolding while retaining the production fix, the permanent race regression and the zero-session/restart boundary. Phase 7 branch run `34018317456` passed before promotion.
+
+## Final technical `main` verification
+
+The cleaned tested head was promoted to `main` unchanged at:
+
+`653153906c3569f2f13bd733ff9aaf7d2ea2b1c3`
+
+All six authoritative workflows completed successfully on that exact `main` SHA:
+
+- Verified Through Phase 3 — run `34018473665` — **SUCCESS**;
+- Phase 4 Laravel Session API — run `34018473673` — **SUCCESS**;
+- Phase 5 Session Isolation — run `34018473708` — **SUCCESS**;
+- Phase 6 Lifecycle Management — run `34018473693` — **SUCCESS**;
+- Phase 7 Generic Tool Profiles — run `34018473683` — **SUCCESS**; and
+- Phase 8 Phrasly Reference Implementation — run `34018473674` — **SUCCESS**.
+
+Result: **PASS — SB-008-008 is technically resolved.**
+
 ## Inherited regression gates
 
-All required Phase 1-7 regression workflows passed on the exact tested Phase 8 head. The dedicated Phase 8 workflow also passed.
+All required Phase 1-7 regression workflows passed on the exact tested Phase 8 head and again on the exact corrected technical `main` head `653153906c3569f2f13bd733ff9aaf7d2ea2b1c3`. The dedicated Phase 8 workflow also passed.
 
 Result: **PASS**.
 
@@ -92,26 +124,8 @@ These are future-phase responsibilities and do not invalidate the Phase 8 exit g
 
 The Master Blueprint v1.1 Phase 8 technical exit gate is satisfied.
 
-Phase 8 is **GREEN / COMPLETE / APPROVED**.
+The owner explicitly approved Phase 8 on **2026-09-06** and explicitly instructed the final SB-008-008 verification/closure sequence to be completed before unlocking Phase 9.
 
-The owner explicitly approved Phase 8 on **2026-09-06**. PR #11 was then merged without changing the approved branch head.
+SB-008-008 is fixed and regression-tested. The earlier red runs remain recorded rather than erased. The temporary diagnostic branch trigger has been removed while the permanent race regression remains authoritative.
 
-Promoted `main` head: `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`.
-
-All six authoritative workflows passed on that resulting `main` SHA, attempt 1:
-
-- Verified Through Phase 3 — run `34007646004` — **SUCCESS**;
-- Phase 4 Laravel Session API — run `34007645971` — **SUCCESS**;
-- Phase 5 Session Isolation — run `34007646039` — **SUCCESS**;
-- Phase 6 Lifecycle Management — run `34007646000` — **SUCCESS**;
-- Phase 7 Generic Tool Profiles — run `34007646152` — **SUCCESS**; and
-- Phase 8 Phrasly Reference Implementation — run `34007646109` — **SUCCESS**.
-
-Phase 8 is therefore **GREEN / COMPLETE / APPROVED**. Phase 9 — Authentication-Failure Behaviour — is now eligible under the Blueprint sequence but remains **NOT STARTED** until explicit instruction.
-
-
-## Final completion-ledger validation incident
-
-Final ledger head `12060854c351232b9ed313e45c337030208af2a4` produced five successful authoritative workflows and a reproducible red Phase 7 composite workflow run `34007830712` on attempts 1 and 2. Both failures occurred in the unchanged inherited Phase 6 orphan-worker fixture after the Phase 4, Phase 5 and Phase 7 suites had already passed against the same long-lived worker. The standalone Phase 6 workflow passed on the same SHA.
-
-The failure is retained as SB-008-008. The Phase 7 workflow now asserts zero tracked worker sessions, re-establishes a clean browser-worker process boundary, waits for health, and then executes the inherited Phase 6 suite unchanged. This correction does not skip, retry, or weaken any lifecycle assertion. Phase 8 completion remains conditional on all six workflows passing on the exact head containing this correction.
+This closure record is effective only after all six authoritative workflows pass on the final `main` head containing this documentation and workflow cleanup, in accordance with the exact-head closure rule. Once that final validation is green, Phase 8 is **GREEN / COMPLETE / APPROVED**, and Phase 9 — Authentication-Failure Behaviour — is **UNLOCKED / NOT STARTED**.
