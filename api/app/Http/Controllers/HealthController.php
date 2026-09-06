@@ -60,6 +60,7 @@ final class HealthController
             $toolProfileSummary = $toolProfiles->summary();
             $browserStateConfiguration = $authorizedBrowserState->configuration();
             $configurationHealthy = strlen((string) config('browser.service_auth_secret', '')) >= 32
+                && strlen((string) config('browser.operator_auth_secret', '')) >= 32
                 && strlen((string) config('browser.worker_control_secret', '')) >= 32
                 && $configuredMaxSessions >= 2
                 && $configuredMaxSessions <= 15
@@ -80,6 +81,7 @@ final class HealthController
             'session_owner' => 'laravel',
             'viewer_grant_issuer' => 'laravel',
             'service_auth' => 'hmac-sha256-timestamp-nonce-v1',
+            'operator_auth' => 'private-shared-secret-v1',
             'database' => $databaseHealthy ? 'ok' : 'unavailable',
             'browser_worker' => $workerHealthy ? 'ok' : 'unavailable',
             'configuration' => $configurationHealthy ? 'ok' : 'invalid',
