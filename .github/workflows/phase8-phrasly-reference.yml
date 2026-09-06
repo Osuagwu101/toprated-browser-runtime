@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase8-phrasly-reference
+      - phase9-auth-failure-behaviour
       - main
   workflow_dispatch:
 
