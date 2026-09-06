@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Exceptions\RuntimeApiException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 final class ToolAuthenticationState
@@ -141,6 +142,6 @@ final class ToolAuthenticationState
             return null;
         }
 
-        return now()->parse((string) $value)->toIso8601String();
+        return Carbon::parse((string) $value)->toIso8601String();
     }
 }
