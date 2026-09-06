@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase10-second-tool-validation
+      - phase10-multi-tool-one-click-auth
       - main
   workflow_dispatch:
 
@@ -31,7 +32,7 @@ env:
 jobs:
   phase10-second-tool:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 65
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,14 +47,31 @@ jobs:
           source = Path('api/config/tool-profiles.json')
           destination = Path('api/config/tool-profiles.phase10-ci.json')
           profiles = json.loads(source.read_text())
+
           second = profiles['sneakwrite']
           assert second['enabled'] is True, second
           assert second['launch_url'] == 'https://sneakwrite.net', second
           assert second.get('browser_state', {}).get('required') is False, second
           assert second.get('authentication', {}).get('required') is False, second
 
-          # CI substitutes only external network reachability. The same real
-          # SneakWrite slug and generic runtime path are used by the E2E gate.
+          stealth = profiles['stealthwriter']
+          assert stealth['enabled'] is True, stealth
+          assert stealth['launch_url'] == 'https://stealthwriter.ai/dashboard', stealth
+          assert stealth['browser_state']['required'] is True, stealth
+          assert stealth['browser_state']['allowed_hosts'] == ['stealthwriter.ai'], stealth
+          assert stealth['authentication']['required'] is True, stealth
+          assert '/dashboard' in stealth['authentication']['url_contains_any'], stealth
+
+          chatgpt = profiles['chatgpt']
+          assert chatgpt['enabled'] is True, chatgpt
+          assert chatgpt['launch_url'] == 'https://chatgpt.com/', chatgpt
+          assert chatgpt['browser_state']['required'] is True, chatgpt
+          assert set(chatgpt['browser_state']['allowed_hosts']) == {'chatgpt.com', 'openai.com'}, chatgpt
+          assert chatgpt['authentication']['required'] is True, chatgpt
+          assert '[data-testid="accounts-profile-button"]' in chatgpt['authentication']['selectors_any'], chatgpt
+
+          # CI substitutes external network reachability only. The real named slugs,
+          # shared-state requirement and authentication policies stay intact.
           second['launch_url'] = 'http://127.0.0.1:19092/app'
           second['browser_state'] = {
               'required': False,
@@ -63,8 +81,15 @@ jobs:
               'required': False,
               'timeout_seconds': 15,
           }
+
+          stealth['launch_url'] = 'http://127.0.0.1:19093/stealthwriter/dashboard'
+          stealth['browser_state']['allowed_hosts'] = ['127.0.0.1']
+
+          chatgpt['launch_url'] = 'http://127.0.0.1:19093/chatgpt/'
+          chatgpt['browser_state']['allowed_hosts'] = ['127.0.0.1']
+
           destination.write_text(json.dumps(profiles, indent=2) + '\n')
-          print('phase10_ci_profile=sneakwrite-loopback-substitution')
+          print('phase10_ci_profiles=sneakwrite+stealthwriter+chatgpt-loopback-substitution')
           PY
 
       - name: Repository-wide type and syntax gate
@@ -75,7 +100,9 @@ jobs:
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
           test -f browser-worker/test/second-tool-fixture.mjs
+          test -f browser-worker/test/multi-auth-tool-fixture.mjs
           test -f tests/phase10-e2e.py
+          test -f tests/phase10-multi-auth-e2e.py
           test -f docs/audits/phase-10.md
           test -f api/config/tool-profiles.phase10-ci.json
           grep -F 'TOOL_PROFILES_PATH' api/config/browser.php docker-compose.yml
@@ -89,12 +116,26 @@ jobs:
           assert profiles['phrasly']['enabled'] is True
           assert profiles['phrasly']['browser_state']['required'] is True
           assert profiles['phrasly']['authentication']['required'] is True
+          assert profiles['stealthwriter']['enabled'] is True
+          assert profiles['stealthwriter']['launch_url'] == 'https://stealthwriter.ai/dashboard'
+          assert profiles['stealthwriter']['browser_state']['required'] is True
+          assert profiles['stealthwriter']['authentication']['required'] is True
+          assert profiles['chatgpt']['enabled'] is True
+          assert profiles['chatgpt']['launch_url'] == 'https://chatgpt.com/'
+          assert profiles['chatgpt']['browser_state']['required'] is True
+          assert profiles['chatgpt']['authentication']['required'] is True
           ci=json.load(open('api/config/tool-profiles.phase10-ci.json'))
           assert ci['sneakwrite']['launch_url'] == 'http://127.0.0.1:19092/app'
+          assert ci['stealthwriter']['launch_url'] == 'http://127.0.0.1:19093/stealthwriter/dashboard'
+          assert ci['stealthwriter']['browser_state']['allowed_hosts'] == ['127.0.0.1']
+          assert ci['stealthwriter']['authentication'] == profiles['stealthwriter']['authentication']
+          assert ci['chatgpt']['launch_url'] == 'http://127.0.0.1:19093/chatgpt/'
+          assert ci['chatgpt']['browser_state']['allowed_hosts'] == ['127.0.0.1']
+          assert ci['chatgpt']['authentication'] == profiles['chatgpt']['authentication']
           assert ci['phrasly'] == profiles['phrasly']
           print('phase10_profile_contract=pass')
           PY
-          if grep -R --line-number -iE 'phrasly|sneakwrite' browser-worker/src api/app api/routes api/config/browser.php; then
+          if grep -R --line-number -iE 'phrasly|sneakwrite|stealthwriter|chatgpt' browser-worker/src api/app api/routes api/config/browser.php; then
             echo 'Tool-specific branching leaked into generic runtime core.' >&2
             exit 1
           fi
@@ -149,9 +190,9 @@ jobs:
           assert h['browser_core']=='generic', h
           assert h['operator_auth']=='private-shared-secret-v1', h
           assert h['tool_profiles']['configurationValid'] is True, h
-          assert h['tool_profiles']['enabledCount'] >= 7, h
-          assert h['tool_profiles']['statefulCount'] >= 2, h
-          assert h['tool_profiles']['authenticationRequiredCount'] >= 2, h
+          assert h['tool_profiles']['enabledCount'] >= 10, h
+          assert h['tool_profiles']['statefulCount'] >= 4, h
+          assert h['tool_profiles']['authenticationRequiredCount'] >= 4, h
           assert h['browser_state']['persistence']=='session-ephemeral', h
           assert w['status']=='ok', w
           assert w['browserCore']=='generic', w
@@ -227,9 +268,9 @@ jobs:
             }
             echo "tool_auth_state_persistence=metadata-only\n";
           '
-          docker compose logs --no-color api browser-worker >/tmp/phase10-runtime-before-second-tool.log
+          docker compose logs --no-color api browser-worker >/tmp/phase10-runtime-before-tool-tests.log
           for marker in 'must-never-be-submitted' 'phase9-secret-otp' "$RUNTIME_OPERATOR_AUTH_SECRET"; do
-            if grep -F "$marker" /tmp/phase10-runtime-before-second-tool.log; then
+            if grep -F "$marker" /tmp/phase10-runtime-before-tool-tests.log; then
               echo "sensitive_value_in_logs=$marker" >&2
               exit 1
             fi
@@ -249,14 +290,37 @@ jobs:
       - name: Phase 10 SneakWrite second-tool E2E
         run: python3 tests/phase10-e2e.py
 
-      - name: Verify second-tool credential marker is absent from logs
+      - name: Start deterministic multi-auth tool fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/multi-auth-tool-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19093/health').then(async r=>{const p=await r.json();if(!r.ok||!Array.isArray(p.tools)||!p.tools.includes('stealthwriter')||!p.tools.includes('chatgpt'))process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Phase 10 multi-tool one-click-auth E2E
+        run: python3 tests/phase10-multi-auth-e2e.py
+
+      - name: Verify tool credential and shared-state markers are absent from logs
         run: |
           set -euo pipefail
           docker compose logs --no-color api browser-worker >/tmp/phase10-runtime.log
-          if grep -F 'phase10-must-never-reach-writer-runtime' /tmp/phase10-runtime.log; then
-            echo 'phase10_sensitive_value_in_logs=credential-marker' >&2
-            exit 1
-          fi
+          for marker in \
+            'phase10-must-never-reach-writer-runtime' \
+            'phase10-multi-auth-password-marker' \
+            'stealthwriter-session' \
+            'stealthwriter-auth' \
+            'chatgpt-session' \
+            'chatgpt-auth' \
+            'shared-valid'; do
+            if grep -F "$marker" /tmp/phase10-runtime.log; then
+              echo "phase10_sensitive_value_in_logs=$marker" >&2
+              exit 1
+            fi
+          done
           echo 'phase10_sensitive_logs=clean'
 
       - name: Re-establish clean worker boundary before inherited lifecycle regression
