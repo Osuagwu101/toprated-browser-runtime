@@ -221,3 +221,5 @@ The owner reran `scripts/phase8-phrasly-acceptance.py` against the corrected hea
 - `rawStatePrinted`: `false`.
 
 This satisfies the Master Blueprint v1.1 Phase 8 exit gate: **one self-hosted Chromium reaches authenticated Phrasly from shared state**. Final exact-head CI evidence is still required before owner approval is requested.
+
+Draft promotion PR: #11. It remains unmerged pending all six authoritative exact-head workflows and explicit owner approval.
