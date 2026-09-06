@@ -143,14 +143,10 @@ jobs:
             process.exit(1);
           });
           NODE
-          echo 'phase7_pre_restart_processes_and_profiles:'
-          docker compose exec -T browser-worker sh -lc "ps -eo pid,ppid,pgid,state,comm,args | grep -E '[c]hromium|[i]solation-fixture' || true; find /tmp -maxdepth 1 -type d -name 'toprated-browser-*' -print | sort || true"
           docker compose restart browser-worker
           for i in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase7-phase6-worker-health.json; then
               cat /tmp/phase7-phase6-worker-health.json
-              echo 'phase7_post_restart_processes_and_profiles:'
-              docker compose exec -T browser-worker sh -lc "ps -eo pid,ppid,pgid,state,comm,args | grep -E '[c]hromium|[i]solation-fixture' || true; find /tmp -maxdepth 1 -type d -name 'toprated-browser-*' -print | sort || true"
               exit 0
             fi
             sleep 1
@@ -179,29 +175,7 @@ jobs:
         run: python3 tests/phase6-orphan-create-race.py
 
       - name: Preserve Phase 6 lifecycle and restart regression
-        run: |
-          set +e
-          set -o pipefail
-          mkdir -p /tmp/phase7-diagnostics
-          PYTHONUNBUFFERED=1 python3 tests/phase6-e2e.py 2>&1 | tee /tmp/phase7-diagnostics/phase6-e2e.log
-          status=${PIPESTATUS[0]}
-          echo "$status" > /tmp/phase7-diagnostics/phase6-exit-code.txt
-          if [ "$status" -ne 0 ]; then
-            echo "phase6_composite_exit=$status" >&2
-            docker compose exec -T browser-worker sh -lc "ps -eo pid,ppid,pgid,state,comm,args | grep -E '[c]hromium|[i]solation-fixture' || true; find /tmp -maxdepth 1 -type d -name 'toprated-browser-*' -print | sort || true" > /tmp/phase7-diagnostics/worker-processes-and-profiles.txt 2>&1 || true
-            docker compose logs --no-color browser-worker > /tmp/phase7-diagnostics/browser-worker.log 2>&1 || true
-            docker compose logs --no-color lifecycle-reaper > /tmp/phase7-diagnostics/lifecycle-reaper.log 2>&1 || true
-          fi
-          exit "$status"
-
-      - name: Upload Phase 6 composite diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase7-phase6-composite-diagnostics
-          path: /tmp/phase7-diagnostics
-          if-no-files-found: error
-          retention-days: 3
+        run: python3 tests/phase6-e2e.py
 
       - name: Verify no browser process or profile residue
         run: |
