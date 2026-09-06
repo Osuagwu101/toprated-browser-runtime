@@ -178,18 +178,27 @@ jobs:
       - name: Preserve Phase 6 lifecycle and restart regression
         run: |
           set +e
-          PYTHONUNBUFFERED=1 python3 tests/phase6-e2e.py
-          status=$?
+          set -o pipefail
+          mkdir -p /tmp/phase7-diagnostics
+          PYTHONUNBUFFERED=1 python3 tests/phase6-e2e.py 2>&1 | tee /tmp/phase7-diagnostics/phase6-e2e.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > /tmp/phase7-diagnostics/phase6-exit-code.txt
           if [ "$status" -ne 0 ]; then
             echo "phase6_composite_exit=$status" >&2
-            echo 'phase6_failure_worker_snapshot:' >&2
-            docker compose exec -T browser-worker sh -lc "ps -eo pid,ppid,pgid,state,comm,args | grep -E '[c]hromium|[i]solation-fixture' || true; find /tmp -maxdepth 1 -type d -name 'toprated-browser-*' -print | sort || true" || true
-            echo 'phase6_failure_worker_logs:' >&2
-            docker compose logs --no-color browser-worker || true
-            echo 'phase6_failure_reaper_logs:' >&2
-            docker compose logs --no-color lifecycle-reaper || true
+            docker compose exec -T browser-worker sh -lc "ps -eo pid,ppid,pgid,state,comm,args | grep -E '[c]hromium|[i]solation-fixture' || true; find /tmp -maxdepth 1 -type d -name 'toprated-browser-*' -print | sort || true" > /tmp/phase7-diagnostics/worker-processes-and-profiles.txt 2>&1 || true
+            docker compose logs --no-color browser-worker > /tmp/phase7-diagnostics/browser-worker.log 2>&1 || true
+            docker compose logs --no-color lifecycle-reaper > /tmp/phase7-diagnostics/lifecycle-reaper.log 2>&1 || true
           fi
           exit "$status"
+
+      - name: Upload Phase 6 composite diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-phase6-composite-diagnostics
+          path: /tmp/phase7-diagnostics
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Verify no browser process or profile residue
         run: |
