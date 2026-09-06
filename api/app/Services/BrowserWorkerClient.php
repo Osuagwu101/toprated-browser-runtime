@@ -10,6 +10,9 @@ final class BrowserWorkerClient
 {
     private const READ_CONNECTION_ATTEMPTS = 4;
     private const READ_CONNECTION_RETRY_DELAY_MICROSECONDS = 100000;
+    private const DEFAULT_REQUEST_TIMEOUT_SECONDS = 15;
+    private const START_REQUEST_OVERHEAD_SECONDS = 30;
+    private const MAX_START_REQUEST_TIMEOUT_SECONDS = 60;
 
     private function url(string $path): string
     {
@@ -46,7 +49,13 @@ final class BrowserWorkerClient
             $payload['browserState'] = $browserState;
         }
 
-        return $this->request('POST', '/browser/sessions', $payload);
+        $authenticationTimeout = (int) ($authentication['timeoutSeconds'] ?? 0);
+        $requestTimeout = min(
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+            max(self::DEFAULT_REQUEST_TIMEOUT_SECONDS, $authenticationTimeout + self::START_REQUEST_OVERHEAD_SECONDS),
+        );
+
+        return $this->request('POST', '/browser/sessions', $payload, true, false, $requestTimeout);
     }
 
     public function stop(string $workerSessionId): array
@@ -60,12 +69,13 @@ final class BrowserWorkerClient
         ?array $payload = null,
         bool $authenticateControl = true,
         bool $retryConnection = false,
+        int $timeoutSeconds = self::DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ): array {
         $attempts = $retryConnection ? self::READ_CONNECTION_ATTEMPTS : 1;
         $response = null;
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-            $pending = Http::acceptJson()->timeout(15);
+            $pending = Http::acceptJson()->timeout($timeoutSeconds);
             if ($authenticateControl) {
                 $secret = (string) config('browser.worker_control_secret', '');
                 if (strlen($secret) < 32) {
