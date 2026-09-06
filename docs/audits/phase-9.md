@@ -1,15 +1,17 @@
 # Phase 9 Audit — Authentication-Failure Behaviour
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**, subject to the final documentation-head exact-CI validation described below.
+Status: **OWNER APPROVED — COMPLETE once the final approval-record `main` head passes exact-CI validation.**
 
 ## Phase anchor
 
 - Current phase: **Phase 9 — Authentication-Failure Behaviour**
-- Last phase marked COMPLETE: **Phase 8 — Phrasly Reference Implementation**
+- Last phase marked COMPLETE before Phase 9: **Phase 8 — Phrasly Reference Implementation**
 - Blueprint: **Master Blueprint v1.1**
 - Phase 9 implementation baseline: standalone `main` at `3eeb19c8ed4dea682b985908ea5e18a35303ae47`
 - Final tested implementation branch head: `71b0d1852a073a9e5a258abde1116abcaa7c3bac`
 - Promoted technical `main` head: `71b0d1852a073a9e5a258abde1116abcaa7c3bac`
+- Final technical documentation/closure `main` head: `808d2411a34a26c438fc46d3e4b8fb6c45c16f39`
+- Owner approval: **RECEIVED 2026-09-06**
 
 Blueprint exit gate:
 
@@ -108,6 +110,18 @@ All seven authoritative workflows passed again on that exact `main` head:
 - Phase 8 Phrasly Reference Implementation — run `34027018083` — SUCCESS;
 - Phase 9 Authentication-Failure Behaviour — run `34027018178` — SUCCESS.
 
+## Exact final documentation/closure-head evidence
+
+All seven authoritative workflows passed on exact final documentation/closure `main` SHA `808d2411a34a26c438fc46d3e4b8fb6c45c16f39`:
+
+- Verified Through Phase 3 — run `34027609813` — SUCCESS;
+- Phase 4 Laravel Session API — run `34027609862` — SUCCESS;
+- Phase 5 Session Isolation — run `34027609821` — SUCCESS;
+- Phase 6 Lifecycle Management — run `34027609864` — SUCCESS;
+- Phase 7 Generic Tool Profiles — run `34027609795` — SUCCESS;
+- Phase 8 Phrasly Reference Implementation — run `34027609823` — SUCCESS;
+- Phase 9 Authentication-Failure Behaviour — run `34027609792` — SUCCESS.
+
 ## Standing invariant check
 
 1. Browser Use preserved — **PASS**: work remains in the standalone repository; no Phase 15 production integration was introduced.
@@ -125,8 +139,10 @@ All seven authoritative workflows passed again on that exact `main` head:
 13. Capacity configurable — **PASS**; empirical capacity remains Phase 18.
 14. Rollback preserved — **N/A — FUTURE PHASE 15/19**; production Browser Use remains untouched.
 
-## Gate status
+## Gate status and owner approval
 
-The Phase 9 exit gate is technically satisfied on the tested branch and promoted technical `main` head. This closure commit also removes the temporary Phase 9 branch trigger from inherited workflows while retaining their `main` triggers and the distinct CI-only operator secret. Under the engineering contract, the documentation/closure head must itself pass all applicable authoritative workflows before this record becomes the final technical closure state.
+The Phase 9 exit gate is technically satisfied on the tested branch, promoted technical `main` head and final documentation/closure `main` head. All seven authoritative workflows are terminal green on the final technical closure SHA `808d2411a34a26c438fc46d3e4b8fb6c45c16f39`.
 
-If that final exact-head validation is green, Phase 9 status is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. Phase 10 remains **NOT STARTED** until explicit owner approval of Phase 9 completion.
+The owner explicitly approved Phase 9 completion on **2026-09-06**.
+
+This approval-record commit is documentation-only. Under the engineering contract, the resulting `main` approval-record head must itself pass all seven applicable authoritative workflows. When that exact-head validation is green, Phase 9 is **GREEN / COMPLETE / APPROVED** and Phase 10 — Second-tool validation (Steno Writer) — is **UNLOCKED / NOT STARTED** until separately instructed.
