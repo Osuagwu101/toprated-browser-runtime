@@ -1,0 +1,281 @@
+name: Phase 9 Authentication-Failure Behaviour
+
+on:
+  push:
+    branches:
+      - phase9-auth-failure-behaviour
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase9-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase9-ci-service-auth-secret-not-for-production-0123456789abcdef
+  RUNTIME_OPERATOR_AUTH_SECRET: phase9-ci-operator-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase9-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 5
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+  BROWSER_STATE_MAX_BYTES: 262144
+
+jobs:
+  phase9-auth-failure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Phase 9 static and unit gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          test -f api/app/Services/ToolAuthenticationState.php
+          test -f api/app/Http/Middleware/VerifyOperatorRequest.php
+          test -f api/app/Http/Controllers/ToolAuthController.php
+          test -f api/database/migrations/2026_09_06_000003_create_tool_auth_states.php
+          test -f tests/phase9-e2e.py
+          grep -F "operator.auth" api/routes/api.php api/bootstrap/app.php
+          grep -F "RUNTIME_OPERATOR_AUTH_SECRET" .env.example docker-compose.yml api/config/browser.php
+          grep -F "TOOL_REAUTH_REQUIRED" api/app/Services/ToolAuthenticationState.php api/app/Services/SessionManager.php browser-worker/src/server.mjs tests/phase9-e2e.py
+          grep -F "response.status===423" browser-worker/src/viewer-page.mjs
+          grep -F "checkAuthentication" browser-worker/src/browser-state.mjs browser-worker/src/server.mjs
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config/browser.php; then
+            echo 'Phrasly-specific branching leaked into generic runtime core.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E 'authenticated_cookies|session_tokens|auth_headers|browser_state' api/app/Models api/database/migrations; then
+            echo 'Raw authorized browser state must not be persisted in durable runtime records.' >&2
+            exit 1
+          fi
+
+      - name: Build Phase 9 containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then
+              echo 'compose_build=pass'
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo 'compose_build=fail attempts=3' >&2
+              exit 1
+            fi
+            echo "compose_build_retry_in_seconds=${delay}" >&2
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
+
+      - name: Boot runtime without autonomous reaper for ownership and auth regressions
+        run: docker compose up -d api browser-worker
+
+      - name: Wait for Phase 9 readiness
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase9-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase9-worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/phase9-health.json
+          cat /tmp/phase9-worker-health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/phase9-health.json'))
+          w=json.load(open('/tmp/phase9-worker-health.json'))
+          assert h['status']=='ok', h
+          assert h['browser_core']=='generic', h
+          assert h['operator_auth']=='private-shared-secret-v1', h
+          assert h['tool_profiles']['configurationValid'] is True, h
+          assert h['tool_profiles']['statefulCount'] >= 2, h
+          assert h['tool_profiles']['authenticationRequiredCount'] >= 2, h
+          assert h['browser_state']['persistence']=='session-ephemeral', h
+          assert w['status']=='ok', w
+          assert w['browserCore']=='generic', w
+          assert w['viewer']['rawCdpExposed'] is False, w
+          PY
+
+      - name: Preserve Phase 4 Laravel ownership regression
+        run: python3 tests/phase4-e2e.py
+
+      - name: Start same-origin isolation fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/isolation-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Preserve Phase 5 isolation regression
+        run: python3 tests/phase5-e2e.py
+
+      - name: Preserve Phase 7 generic profile regression
+        run: python3 tests/phase7-e2e.py
+
+      - name: Start authenticated-state fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/auth-state-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Preserve Phase 8 state injection and no-viewer regression
+        run: python3 tests/phase8-e2e.py
+
+      - name: Reset inherited Phase 8 auth latch through operator boundary
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "X-Toprated-Operator-Secret: ${RUNTIME_OPERATOR_AUTH_SECRET}" \
+            http://127.0.0.1:18080/api/operator/tool-auth/generic-phase8-state/restore \
+            >/tmp/phase9-reset.json
+          python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/phase9-reset.json'))
+          assert data['status']=='ready', data
+          assert data['adminActionRequired'] is False, data
+          PY
+
+      - name: Phase 9 admin-only authentication failure E2E
+        run: python3 tests/phase9-e2e.py
+
+      - name: Verify auth state contains metadata only and secrets are absent from logs
+        run: |
+          set -euo pipefail
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $columns=$db->query("pragma table_info(tool_auth_states)")->fetchAll(PDO::FETCH_ASSOC);
+            $names=array_map(fn($row)=>strtolower((string)$row["name"]),$columns);
+            foreach ($names as $name) {
+              foreach (["cookie","browser_state","session_token","auth_header","password","otp","verification"] as $forbidden) {
+                if (str_contains($name,$forbidden)) { fwrite(STDERR,"forbidden_tool_auth_column=".$name.PHP_EOL); exit(1); }
+              }
+            }
+            foreach (["tool_slug","status","reason_code","invalidated_at","restored_at","verified_at"] as $required) {
+              if (!in_array($required,$names,true)) { fwrite(STDERR,"missing_tool_auth_column=".$required.PHP_EOL); exit(1); }
+            }
+            echo "tool_auth_state_persistence=metadata-only\n";
+          '
+          docker compose logs --no-color api browser-worker >/tmp/phase9-runtime.log
+          for marker in 'must-never-be-submitted' 'shared-state-local' 'shared-state-session' 'phase9-secret-otp' "$RUNTIME_OPERATOR_AUTH_SECRET"; do
+            if grep -F "$marker" /tmp/phase9-runtime.log; then
+              echo "sensitive_value_in_logs=$marker" >&2
+              exit 1
+            fi
+          done
+          echo 'phase9_sensitive_logs=clean'
+
+      - name: Re-establish clean worker boundary before inherited lifecycle regression
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const secret = process.env.WORKER_CONTROL_SECRET;
+          fetch('http://127.0.0.1:8081/browser/sessions', {
+            headers: { 'x-toprated-worker-secret': secret },
+          }).then(async (response) => {
+            const payload = await response.json();
+            if (!response.ok || payload.activeCount !== 0 || payload.startingCount !== 0) {
+              console.error(JSON.stringify({ status: response.status, activeCount: payload.activeCount, startingCount: payload.startingCount }));
+              process.exit(1);
+            }
+            console.log('phase9_pre_phase6_worker_sessions=0');
+          }).catch((error) => {
+            console.error(String(error.message || error));
+            process.exit(1);
+          });
+          NODE
+          docker compose restart browser-worker
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase9-phase6-worker-health.json; then
+              cat /tmp/phase9-phase6-worker-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color browser-worker || true
+          exit 1
+
+      - name: Start autonomous Phase 6 lifecycle reaper
+        run: |
+          set -euo pipefail
+          docker compose up -d lifecycle-reaper
+          for i in $(seq 1 20); do
+            if test -n "$(docker compose ps -q lifecycle-reaper)"; then
+              docker compose logs --no-color lifecycle-reaper > /tmp/phase9-reaper.log || true
+              if grep -F '"phase":6' /tmp/phase9-reaper.log; then
+                cat /tmp/phase9-reaper.log
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color lifecycle-reaper || true
+          exit 1
+
+      - name: Stress orphan creation against active reaper
+        run: python3 tests/phase6-orphan-create-race.py
+
+      - name: Preserve Phase 6 lifecycle and restart regression
+        run: python3 tests/phase6-e2e.py
+
+      - name: Verify no browser process or profile residue
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
+          console.log('phase9_cleanup_scan=clean');
+          NODE
+
+      - name: Verify durable records are terminal
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "open_sessions=0\n";
+          '
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
