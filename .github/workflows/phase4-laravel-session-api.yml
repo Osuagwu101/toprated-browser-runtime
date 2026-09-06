@@ -20,6 +20,7 @@ env:
   VIEWER_SIGNING_SECRET: phase4-ci-viewer-signing-secret-not-for-production-0123456789abcdef
   VIEWER_TOKEN_TTL_SECONDS: 300
   RUNTIME_SERVICE_AUTH_SECRET: phase4-ci-service-auth-secret-not-for-production-0123456789abcdef
+  RUNTIME_OPERATOR_AUTH_SECRET: phase9-ci-operator-secret-not-for-production-0123456789abcdef
   WORKER_CONTROL_SECRET: phase4-ci-worker-control-secret-not-for-production-0123456789abcdef
   SERVICE_AUTH_MAX_SKEW_SECONDS: 300
   VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
