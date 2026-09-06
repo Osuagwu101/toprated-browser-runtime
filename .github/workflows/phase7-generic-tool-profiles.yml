@@ -5,6 +5,7 @@ on:
     branches:
       - phase7-tool-profiles
       - phase8-phrasly-reference
+      - phase9-auth-failure-behaviour
       - main
   workflow_dispatch:
 
