@@ -66,6 +66,20 @@
       "timeout_seconds": 15
     }
   },
+  "sneakwrite": {
+    "enabled": true,
+    "launch_url": "https://sneakwrite.net",
+    "browser_state": {
+      "required": false,
+      "allowed_hosts": [
+        "sneakwrite.net"
+      ]
+    },
+    "authentication": {
+      "required": false,
+      "timeout_seconds": 15
+    }
+  },
   "generic-disabled": {
     "enabled": false,
     "launch_url": "data:text/html,%3Ctitle%3EDisabled%3C/title%3E"
