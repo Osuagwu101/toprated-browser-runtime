@@ -97,7 +97,6 @@ Evidence: fix head `a58e5eea2ce8377429fc8f843f75e26e342a5f94` passed `3386956755
 Status: **FIXED / CLOSED**.
 
 ## Phase 4 closure
-
 Phase 4 is **GREEN / COMPLETE / APPROVED**. Final Phase 4 closure commit: `156372e912b4792baab471263202c5d867131ec4`.
 
 # Phase 5 issues
@@ -197,7 +196,6 @@ Observed: a CI-hardening attempt put all required workflows in one shared Action
 Corrective action: removed the shared cross-workflow concurrency group and retained bounded build retries instead.
 
 Status: **FIXED / CLOSED**.
-
 ### SB-006-004 — Reaper could issue a redundant second stop from its same-pass worker snapshot
 
 Severity: Medium.
@@ -368,3 +366,77 @@ The Master Blueprint v1.1 Phase 8 exit gate — **“One self-hosted Chromium re
 The later final-ledger regression SB-008-008 is now fixed, stress-tested and green on corrected technical `main` head `653153906c3569f2f13bd733ff9aaf7d2ea2b1c3`, where all six authoritative workflows passed. The temporary fix-branch workflow trigger is removed in the final closure change while the permanent race regression remains active.
 
 The owner explicitly instructed this final verification/closure sequence to complete Phase 8 and unlock Phase 9. This closure becomes effective once all six authoritative workflows pass on the final `main` head containing the closure documentation and workflow cleanup. At that point Phase 8 is **GREEN / COMPLETE / APPROVED**, and Phase 9 — Authentication-Failure Behaviour — is **UNLOCKED / NOT STARTED**.
+
+# Phase 9 issues
+
+### SB-009-001 — Authentication failure had no durable shared outage latch
+
+Severity: High / gate blocker.
+
+Underlying cause: Phase 8 authentication rejection was request-local; the runtime had no metadata-only tool-auth availability state to stop later writers from repeatedly launching against known-stale shared state.
+
+Corrective action: added metadata-only `tool_auth_states`; authentication-required launches consult the latch before browser capacity/creation; failed verification latches `reauth_required`; later writers receive safe `TOOL_REAUTH_REQUIRED` / HTTP 423 before Chromium; a later verified launch records readiness again.
+
+Status: **FIXED / VERIFIED / CLOSED**.
+
+### SB-009-002 — An already-open writer viewer could outlive upstream authentication
+
+Severity: High / gate blocker.
+
+Underlying cause: Phase 8 authentication verification occurred before the first viewer grant but was not a continuing predicate on restricted status/frame/input operations.
+
+Corrective action: restricted viewer paths re-check the configured generic authentication indicators. Authentication loss blocks status/frame/input with `TOOL_REAUTH_REQUIRED` before login or verification content is exposed; Laravel latches the outage and cleans the failed browser.
+
+Status: **FIXED / VERIFIED / CLOSED**.
+
+### SB-009-003 — No separate administrator/operator recovery boundary existed
+
+Severity: High / gate blocker.
+
+Underlying cause: administrator recovery semantics were deliberately deferred from Phase 8 to Phase 9.
+
+Corrective action: added a distinct operator-only boundary protected by `RUNTIME_OPERATOR_AUTH_SECRET`; writer/service HMAC does not grant restore authority; restore rejects credential/OTP/verification bodies; operator status exposes metadata only.
+
+Status: **FIXED / VERIFIED / CLOSED**.
+
+### SB-009-004 — Phase 8 inherited failure response needed to evolve without weakening its invariant
+
+Severity: Medium / regression-harness compatibility.
+
+Underlying cause: Phase 8 correctly exposed `TOOL_AUTH_NOT_VERIFIED` / HTTP 409 before Phase 9 owned the safe admin-reauth failure contract.
+
+Corrective action: inherited Phase 8 still requires no viewer and full failed-browser cleanup, but now expects the Phase 9-safe `TOOL_REAUTH_REQUIRED` / HTTP 423. No Phase 8 security assertion was removed.
+
+Status: **FIXED / VERIFIED / CLOSED**.
+
+## Phase 9 closure evidence
+
+Final tested branch SHA: `71b0d1852a073a9e5a258abde1116abcaa7c3bac`.
+
+Exact branch-head authoritative runs — all SUCCESS:
+
+- Verified Through Phase 3 `34026692384`;
+- Phase 4 Laravel Session API `34026692353`;
+- Phase 5 Session Isolation `34026692285`;
+- Phase 6 Lifecycle Management `34026692336`;
+- Phase 7 Generic Tool Profiles `34026692436`;
+- Phase 8 Phrasly Reference Implementation `34026692265`;
+- Phase 9 Authentication-Failure Behaviour `34026692343`.
+
+The tested branch was promoted by controlled fast-forward to technical `main` SHA `71b0d1852a073a9e5a258abde1116abcaa7c3bac`.
+
+Exact technical-main authoritative runs — all SUCCESS:
+
+- Verified Through Phase 3 `34027018121`;
+- Phase 4 Laravel Session API `34027018130`;
+- Phase 5 Session Isolation `34027018106`;
+- Phase 6 Lifecycle Management `34027018149`;
+- Phase 7 Generic Tool Profiles `34027018132`;
+- Phase 8 Phrasly Reference Implementation `34027018083`;
+- Phase 9 Authentication-Failure Behaviour `34027018178`.
+
+The Phase 9 composite explicitly includes the full Phase 1–3 browser/viewer behavioral regression and preserves the inherited Phase 4/5/6/7/8 gates, the Phase 6 12-iteration orphan/reaper stress regression, unchanged lifecycle/restart coverage, residue checks, metadata-only authentication persistence and sensitive-log scans.
+
+The Master Blueprint v1.1 Phase 9 exit gate — **“Failure behaviour matches the admin-only authentication model”** — is technically satisfied. This register update is committed together with final workflow cleanup, including removal of the temporary Phase 9 branch trigger from inherited workflows. Under the repository engineering contract, the resulting documentation/closure `main` head must itself pass all seven authoritative workflows before the technical closure record becomes effective.
+
+After that final exact-head validation, Phase 9 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. Phase 10 remains **NOT STARTED** until the owner explicitly approves Phase 9 completion.
