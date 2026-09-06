@@ -30,7 +30,7 @@ Underlying cause: Phase 7 proved generic configuration mechanics and Phase 8/9 i
 
 Correction: add a server-owned `sneakwrite` profile pointing at the verified official `https://sneakwrite.net` destination. The profile neither requires nor accepts a new writer credential path; authentication remains unset because the current product setting has one-click authentication disabled.
 
-Status: **IMPLEMENTED, UNVERIFIED** until exact-head execution passes.
+Status: **FIXED / VERIFIED** by complete composite run `34029854074` on implementation head `b17e73aef011903f7e0e74bf041b947c798eb262`; final promotion-head revalidation remains required.
 
 ### SB-010-002 — No deterministic second-tool provider acceptance existed
 
@@ -42,7 +42,7 @@ Underlying cause: second-tool portability validation is Phase 10 scope.
 
 Correction: add a deterministic SneakWrite fixture used only by Phase 10 CI. CI copies the committed profile set and substitutes only the SneakWrite network destination with the loopback fixture. The production/default profile remains `https://sneakwrite.net`. The test then launches the `sneakwrite` slug through the unchanged generic runtime, verifies the restricted viewer, same-writer reuse, cross-tool ownership, credential rejection, a subsequent different profile launch and zero remaining browser sessions.
 
-Status: **IMPLEMENTED, UNVERIFIED** until exact-head execution passes.
+Status: **FIXED / VERIFIED** by complete composite run `34029854074` on implementation head `b17e73aef011903f7e0e74bf041b947c798eb262`; final promotion-head revalidation remains required.
 
 ### SB-010-003 — Docker runtime did not propagate the already-supported tool-profile path override
 
@@ -54,7 +54,36 @@ Underlying cause: profile-path configurability existed at application level but 
 
 Correction: propagate `TOOL_PROFILES_PATH` with the existing default `/srv/runtime-api/config/tool-profiles.json` into both API and lifecycle-reaper services. No production path changes unless an operator explicitly overrides the variable.
 
-Status: **IMPLEMENTED, UNVERIFIED** until exact-head execution passes.
+Status: **FIXED / VERIFIED** by readiness plus inherited lifecycle/reaper execution in run `34029854074`; final promotion-head revalidation remains required.
+
+## First complete composite evidence
+
+Implementation head `b17e73aef011903f7e0e74bf041b947c798eb262` passed Phase 10 Second-Tool Validation run `34029854074` end to end.
+
+Verified in that run:
+
+- deterministic Phase 10 profile preparation — PASS;
+- repository type/syntax and static/unit gates — PASS;
+- real container build/readiness — PASS;
+- inherited Phase 1–3 browser/viewer regression — PASS;
+- inherited Phase 4 ownership regression — PASS;
+- inherited Phase 5 isolation regression — PASS;
+- inherited Phase 7 generic-profile regression — PASS;
+- inherited Phase 8 shared-state/no-viewer regression — PASS;
+- inherited Phase 9 admin-only authentication-failure regression — PASS;
+- metadata-only auth persistence / sensitive-log scan — PASS;
+- deterministic SneakWrite fixture — PASS;
+- `tests/phase10-e2e.py` second-tool provider path — PASS;
+- SneakWrite credential-marker log scan — PASS;
+- clean worker boundary — PASS;
+- autonomous Phase 6 reaper — PASS;
+- permanent 12-iteration orphan/reaper race stress — PASS;
+- unchanged Phase 6 lifecycle/restart regression — PASS;
+- browser/profile residue scan — PASS;
+- durable terminal-record check — PASS;
+- teardown — PASS.
+
+This is strong implementation evidence, but it is not yet the final branch/main promotion evidence required by the engineering contract.
 
 ## Verification requirements
 
@@ -71,25 +100,25 @@ Phase 10 is not green merely because the profile exists. The authoritative Phase
 9. inherited Phase 1–9 regressions remain green;
 10. Phase 6 race/lifecycle, terminal-record and residue cleanup gates remain green.
 
-## Standing invariant check before execution
+## Standing invariant check after first execution
 
-1. Browser Use preserved — **PASS / read-only production inspection only**.
+1. Browser Use preserved — **PASS / production repository inspected read-only only**.
 2. Separation maintained — **PASS**.
-3. Generic core — **PASS by code audit; execution pending**.
-4. Credentials never reach writers — **PASS by design; negative execution pending**.
-5. No raw CDP / unrestricted DevTools — **PASS / inherited guard retained**.
+3. Generic core — **PASS**: production source scan rejects both `phrasly` and `sneakwrite` names in generic core.
+4. Credentials never reach writers — **PASS**: second-tool credential submission is rejected and marker absent from logs.
+5. No raw CDP / unrestricted DevTools — **PASS**.
 6. Portability — **PASS**.
 7. Fixed-cost architecture — **PASS**.
-8. Logging policy — **PASS by design; execution scan pending**.
+8. Logging policy — **PASS**.
 9. Spend discipline — **PASS**.
-10. Session isolation — **PASS inherited baseline; Phase 10 rerun pending**.
-11. Active sessions protected — **PASS inherited baseline; Phase 10 rerun pending**.
-12. Abandoned sessions die — **PASS inherited baseline; Phase 10 rerun pending**.
+10. Session isolation — **PASS / inherited Phase 5 regression green**.
+11. Active sessions protected — **PASS / inherited Phase 6 regression green**.
+12. Abandoned sessions die — **PASS / orphan-race stress and lifecycle regressions green**.
 13. Capacity configurable — **PASS; empirical capacity remains Phase 18**.
 14. Rollback preserved — **N/A — FUTURE PHASE 15/19**.
 
 ## Current gate status
 
-Implementation exists on the isolated branch but has not yet earned exact-head execution evidence.
+The implementation has passed one complete composite execution. The documentation update changes the branch head, so the Phase 10 workflow must pass again on the resulting exact branch SHA before promotion. After promotion, all authoritative workflows must pass on the resulting `main` head. Phase 10 remains **IN TEST** until those gates are complete.
 
 **STATUS: IN TEST**
