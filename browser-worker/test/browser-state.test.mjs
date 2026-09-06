@@ -16,6 +16,26 @@ test('normalizes bounded shared cookies and storage for an allowed host', () => 
   assert.deepEqual(result.allowedHosts, ['example.test']);
 });
 
+test('normalizes empty storage arrays emitted by the PHP transport boundary', () => {
+  const result = normalizeBrowserState({
+    cookies: [{ name: 'session', value: 'secret-value', domain: 'example.test', path: '/' }],
+    storage: {
+      localStorage: { local: 'one' },
+      sessionStorage: [],
+    },
+  }, { required: true, allowedHosts: ['example.test'] }, 'https://example.test/dashboard');
+
+  assert.equal(result.state.storage.localStorage.local, 'one');
+  assert.deepEqual(result.state.storage.sessionStorage, {});
+  assert.throws(() => normalizeBrowserState({
+    cookies: [{ name: 'session', value: 'secret-value', domain: 'example.test', path: '/' }],
+    storage: {
+      localStorage: [['unexpected', 'list']],
+      sessionStorage: {},
+    },
+  }, { required: true, allowedHosts: ['example.test'] }, 'https://example.test/dashboard'), /namespace must be an object/);
+});
+
 test('rejects cookie state outside the configured tool hosts', () => {
   assert.throws(() => normalizeBrowserState({
     cookies: [{ name: 'session', value: 'value', domain: 'attacker.test', path: '/' }],
