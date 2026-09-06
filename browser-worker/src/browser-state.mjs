@@ -158,11 +158,8 @@ export async function removeBrowserStateBootstrap(cdp, scriptIdentifier) {
   try { await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: scriptIdentifier }); } catch {}
 }
 
-export async function verifyAuthentication(cdp, policyInput = {}) {
-  const policy = normalizeAuthenticationPolicy(policyInput);
-  if (!policy.required) return { verified: true, required: false };
-
-  const expression = `(() => {
+function authenticationExpression(policy) {
+  return `(() => {
     const policy=${JSON.stringify({ urlContainsAny: policy.urlContainsAny, selectorsAny: policy.selectorsAny })};
     const href=String(location.href||'');
     const urlOk=!policy.urlContainsAny.length||policy.urlContainsAny.some((needle)=>href.includes(needle));
@@ -172,13 +169,31 @@ export async function verifyAuthentication(cdp, policyInput = {}) {
     }
     return {verified:urlOk&&selectorOk};
   })();`;
+}
+
+export async function checkAuthentication(cdp, policyInput = {}) {
+  const policy = normalizeAuthenticationPolicy(policyInput);
+  if (!policy.required) return { verified: true, required: false };
+
+  try {
+    const result = await cdp.send('Runtime.evaluate', {
+      expression: authenticationExpression(policy),
+      returnByValue: true,
+    }, 5000);
+    return { verified: result?.result?.value?.verified === true, required: true };
+  } catch {
+    return { verified: false, required: true };
+  }
+}
+
+export async function verifyAuthentication(cdp, policyInput = {}) {
+  const policy = normalizeAuthenticationPolicy(policyInput);
+  if (!policy.required) return { verified: true, required: false };
 
   const deadline = Date.now() + policy.timeoutSeconds * 1000;
   while (Date.now() <= deadline) {
-    try {
-      const result = await cdp.send('Runtime.evaluate', { expression, returnByValue: true }, 5000);
-      if (result?.result?.value?.verified === true) return { verified: true, required: true };
-    } catch {}
+    const result = await checkAuthentication(cdp, policy);
+    if (result.verified === true) return result;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
