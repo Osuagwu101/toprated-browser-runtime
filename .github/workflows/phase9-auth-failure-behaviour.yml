@@ -3,6 +3,7 @@ name: Phase 9 Authentication-Failure Behaviour
 on:
   push:
     branches:
+      - phase10-multi-tool-one-click-auth
       - phase9-auth-failure-behaviour
       - main
   workflow_dispatch:

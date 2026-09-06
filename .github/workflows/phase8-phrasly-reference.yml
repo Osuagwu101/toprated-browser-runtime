@@ -3,6 +3,7 @@ name: Phase 8 Phrasly Reference Implementation
 on:
   push:
     branches:
+      - phase10-multi-tool-one-click-auth
       - phase8-phrasly-reference
       - main
   workflow_dispatch:

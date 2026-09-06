@@ -3,6 +3,7 @@ name: Phase 4 Laravel Session API
 on:
   push:
     branches:
+      - phase10-multi-tool-one-click-auth
       - phase4-laravel-session-api
       - phase4-ci-baseline-fix
       - phase5-session-isolation
