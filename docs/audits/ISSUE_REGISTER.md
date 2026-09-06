@@ -334,4 +334,4 @@ Status: **FIXED / LIVE-VERIFIED**.
 
 On 2026-09-06, the corrected acceptance harness used the active production-managed shared state to launch a fresh self-hosted Chromium. It returned `PASS` for Phrasly at `https://phrasly.ai/dashboard`, confirmed authenticated state, confirmed viewer access occurred after verification, and printed no raw state.
 
-The Master Blueprint v1.1 Phase 8 exit gate is technically satisfied. Phase 8 is **TECHNICALLY GREEN — AWAITING FINAL EXACT-HEAD CI AND OWNER APPROVAL**. Phase 9 remains **NOT STARTED**.
+The Master Blueprint v1.1 Phase 8 exit gate is technically satisfied. Owner approval was received on 2026-09-06. PR #11 was merged to `main` at `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`; all six authoritative workflows passed on that exact promoted SHA. Phase 8 is **GREEN / COMPLETE / APPROVED**. Phase 9 remains **NOT STARTED**.
