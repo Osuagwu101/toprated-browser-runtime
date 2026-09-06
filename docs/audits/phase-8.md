@@ -1,6 +1,6 @@
 # Phase 8 Audit — Phrasly Reference Implementation
 
-Status: **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**
+Status: **GREEN / COMPLETE / APPROVED**
 
 Phase anchor:
 
@@ -148,7 +148,7 @@ An unauthenticated request to `https://phrasly.ai/dashboard` currently redirects
 
 The deterministic mechanism and inherited gates are verified. On 2026-09-06, the live acceptance harness exercised the active production-managed Phrasly shared state through a fresh self-hosted Chromium and returned `PASS`: authentication was verified, the final safe location was `https://phrasly.ai/dashboard`, viewer access was granted only after verification, and raw state was not printed.
 
-The Blueprint exit gate is therefore technically satisfied. Phase 8 is **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**. Phase 9 is **NOT STARTED**.
+The Blueprint exit gate is therefore technically satisfied. Phase 8 is **GREEN / COMPLETE / APPROVED**. Owner approval was received on 2026-09-06; PR #11 was promoted to `main` at `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`, where all six authoritative workflows passed. Phase 9 is **NOT STARTED**.
 
 
 ## Approved temporary admin-authentication amendment
