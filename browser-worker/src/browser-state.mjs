@@ -41,7 +41,7 @@ function normalizeAllowedHosts(policy, launchUrl) {
 }
 
 function normalizeStorageMap(value) {
-  if (value == null) return {};
+  if (value == null || (Array.isArray(value) && value.length === 0)) return {};
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Browser storage namespace must be an object.');
   const out = {};
   for (const [key, item] of Object.entries(value)) {
