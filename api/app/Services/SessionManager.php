@@ -28,7 +28,6 @@ final class SessionManager
         array $authentication = [],
     ): array {
         return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication): array {
-            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication);
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -39,11 +38,13 @@ final class SessionManager
                 ->latest('created_at')
                 ->first();
 
-            if ($existing !== null) {
-                if ($existing->tool_slug !== $toolSlug) {
-                    throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
-                }
+            if ($existing !== null && $existing->tool_slug !== $toolSlug) {
+                throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
+            }
 
+            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication);
+
+            if ($existing !== null) {
                 $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions, $authentication): ?array {
                     $fresh = BrowserSession::query()->find($existing->id);
                     if ($fresh === null || ! in_array($fresh->status, self::OPEN_STATUSES, true)) {
