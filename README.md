@@ -15,7 +15,7 @@ Verified status:
 - Phase 5 — writer/browser isolation and session ownership: **GREEN / COMPLETE / APPROVED**.
 - Phase 6 — lifecycle management: **GREEN / COMPLETE / APPROVED**.
 - Phase 7 — generic tool-profile framework: **GREEN / COMPLETE / APPROVED**.
-- Phase 8 — Phrasly reference implementation: **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**.
+- Phase 8 — Phrasly reference implementation: **GREEN / COMPLETE / APPROVED**.
 
 The existing Browser Use production path remains untouched.
 
@@ -215,7 +215,7 @@ Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNT
 
 ## Blueprint sequencing
 
-Phase 8 is **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**. The following work remains later-phase work and is not claimed:
+Phase 8 is **GREEN / COMPLETE / APPROVED**. The following work remains later-phase work and is not claimed:
 
 - Phase 9 authentication-failure/admin-reauth behavior;
 - Phase 10 second-tool proof;
@@ -224,7 +224,7 @@ Phase 8 is **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**. The following work
 - Phase 14 production-host deployment;
 - Phase 15 production provider integration.
 
-The Phase 8 live Phrasly exit gate is demonstrated. Phase 9 must not start until the owner explicitly approves Phase 8.
+The Phase 8 live Phrasly exit gate is demonstrated and owner approval was received on 2026-09-06. Phase 9 is eligible but remains not started until explicit instruction.
 
 ## Financial rule
 
