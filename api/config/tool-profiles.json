@@ -120,5 +120,34 @@
   "generic-disabled": {
     "enabled": false,
     "launch_url": "data:text/html,%3Ctitle%3EDisabled%3C/title%3E"
+  },
+  "chatgpt-admin-bootstrap": {
+    "enabled": true,
+    "launch_url": "https://chatgpt.com/",
+    "browser_state": {
+      "required": false,
+      "allowed_hosts": [
+        "chatgpt.com",
+        "openai.com"
+      ]
+    },
+    "authentication": {
+      "required": false,
+      "timeout_seconds": 20
+    }
+  },
+  "stealthwriter-admin-bootstrap": {
+    "enabled": true,
+    "launch_url": "https://stealthwriter.ai/dashboard",
+    "browser_state": {
+      "required": false,
+      "allowed_hosts": [
+        "stealthwriter.ai"
+      ]
+    },
+    "authentication": {
+      "required": false,
+      "timeout_seconds": 15
+    }
   }
 }
