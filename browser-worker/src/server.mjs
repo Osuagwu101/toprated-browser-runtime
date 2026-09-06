@@ -104,7 +104,14 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && requestUrl.pathname === '/browser/status') return writeJson(response, 200, controller.status);
     if (request.method === 'POST' && requestUrl.pathname === '/browser/start') {
       const body = await readJson(request);
-      return writeJson(response, 201, await controller.start(body.url));
+      beginSessionCreate();
+      try {
+        const created = await controller.start(body.url);
+        writeJson(response, 201, created);
+        return;
+      } finally {
+        endSessionCreate();
+      }
     }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/navigate') { const body = await readJson(request); if (!body.url) throw Object.assign(new Error('url is required.'), { statusCode: 400 }); return writeJson(response, 200, await controller.navigateOnly(body.url)); }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/stop') return writeJson(response, 200, await controller.stopOnly());
