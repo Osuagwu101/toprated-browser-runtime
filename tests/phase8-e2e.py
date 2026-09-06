@@ -39,7 +39,6 @@ def signed(method, path, writer, obj=None):
         return exc.code, json.loads(exc.read() or b'{}')
 
 
-
 def worker_json(path, authenticated=True):
     headers = {'accept': 'application/json'}
     if authenticated:
@@ -154,7 +153,6 @@ assert status['title'] == 'PHASE8_AUTHENTICATED', status
 assert status['authentication']['required'] is True, status
 assert status['authentication']['verified'] is True, status
 
-
 # Authorized-state capture is available only through the private worker control plane.
 code, denied_export = worker_json(f"/browser/sessions/{payload['sid']}/authorized-state", authenticated=False)
 assert code == 401, code
@@ -180,7 +178,9 @@ code, closed = signed('DELETE', f"/api/sessions/{created['sessionId']}", writer)
 assert code == 200 and closed['status'] == 'closed', (code, closed)
 
 # State that is syntactically valid but does not satisfy the profile's authenticated
-# indicators must never receive a viewer grant. Phase 9 owns the later admin-reauth UX.
+# indicators must never receive a viewer grant. Phase 9 intentionally upgrades the
+# public result to the safe admin-only reauthentication contract while preserving
+# the Phase 8 no-viewer and cleanup invariants.
 failed_writer = 'phase8-unverified-writer'
 unverified_state = good_state()
 unverified_state['session_tokens']['storage']['localStorage']['phase8-local'] = 'wrong-value'
@@ -189,7 +189,7 @@ code, unverified = signed('POST', '/api/sessions', failed_writer, {
     'tool_slug': 'generic-phase8-state',
     'browser_state': unverified_state,
 })
-assert code == 409 and unverified['code'] == 'TOOL_AUTH_NOT_VERIFIED', (code, unverified)
+assert code == 423 and unverified['code'] == 'TOOL_REAUTH_REQUIRED', (code, unverified)
 assert 'viewerGrant' not in unverified, unverified
 
 # The failed browser must have been cleaned before the request returns.
