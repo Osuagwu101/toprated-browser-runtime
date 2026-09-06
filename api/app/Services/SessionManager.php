@@ -15,6 +15,7 @@ final class SessionManager
     public function __construct(
         private readonly BrowserWorkerClient $worker,
         private readonly ViewerGrantService $viewerGrants,
+        private readonly ToolAuthenticationState $toolAuthentication,
     ) {
     }
 
@@ -27,6 +28,7 @@ final class SessionManager
         array $authentication = [],
     ): array {
         return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication): array {
+            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication);
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -42,13 +44,21 @@ final class SessionManager
                     throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
                 }
 
-                $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions): ?array {
+                $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions, $authentication): ?array {
                     $fresh = BrowserSession::query()->find($existing->id);
                     if ($fresh === null || ! in_array($fresh->status, self::OPEN_STATUSES, true)) {
                         return null;
                     }
 
                     if ($fresh->worker_session_id !== null && isset($workerSessions[$fresh->worker_session_id])) {
+                        $workerSession = $workerSessions[$fresh->worker_session_id];
+                        if (($authentication['required'] ?? false) === true
+                            && ($workerSession['authentication']['verified'] ?? false) !== true) {
+                            $this->toolAuthentication->requireReauthentication($fresh->tool_slug, 'TOOL_AUTH_LOST');
+                            $this->terminateSession($fresh, 'tool_auth_lost', true);
+                            throw $this->toolAuthentication->reauthRequired();
+                        }
+
                         $fresh->forceFill(['last_heartbeat_at' => now()])->save();
 
                         return $this->present($fresh->fresh(), true);
@@ -93,6 +103,10 @@ final class SessionManager
                     ? $exception->errorCode
                     : 'WORKER_START_FAILED';
                 $this->markFailed($session, $failureCode, 'The worker could not create a verified browser session.');
+                if ($exception->errorCode === 'TOOL_AUTH_NOT_VERIFIED') {
+                    $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED');
+                    throw $this->toolAuthentication->reauthRequired();
+                }
                 throw $exception;
             }
 
@@ -112,7 +126,8 @@ final class SessionManager
                     throw $cleanupException;
                 }
                 $this->markFailed($session, 'TOOL_AUTH_NOT_VERIFIED', 'The configured tool did not reach its authenticated state.');
-                throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
+                $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED');
+                throw $this->toolAuthentication->reauthRequired();
             }
 
             $alreadyTracked = BrowserSession::query()
@@ -134,6 +149,10 @@ final class SessionManager
                 'failure_detail' => null,
             ])->save();
 
+            if (($authentication['required'] ?? false) === true) {
+                $this->toolAuthentication->markVerified($toolSlug);
+            }
+
             return $this->present($session->fresh(), false);
         });
     }
@@ -148,6 +167,11 @@ final class SessionManager
                     if (($workerStatus['active'] ?? false) !== true || ($workerStatus['sessionId'] ?? null) !== $session->worker_session_id) {
                         $this->markFailed($session, 'WORKER_SESSION_MISMATCH', 'The worker returned an unexpected browser session identity.');
                         $session = $session->fresh();
+                    } elseif (($workerStatus['authentication']['required'] ?? false) === true
+                        && ($workerStatus['authentication']['verified'] ?? false) !== true) {
+                        $this->toolAuthentication->requireReauthentication($session->tool_slug, 'TOOL_AUTH_LOST');
+                        $this->terminateSession($session, 'tool_auth_lost', true);
+                        throw $this->toolAuthentication->reauthRequired();
                     }
                 } catch (RuntimeApiException $exception) {
                     if (in_array($exception->errorCode, ['WORKER_SESSION_MISSING', 'WORKER_SESSION_GONE'], true)) {
@@ -194,6 +218,14 @@ final class SessionManager
             $session = $this->ownedActive($sessionId, $writerId);
             if ($session->worker_session_id === null) {
                 throw new RuntimeApiException('SESSION_NOT_VIEWABLE', 409, 'The browser session is not ready for viewing.');
+            }
+
+            $workerStatus = $this->worker->status($session->worker_session_id);
+            if (($workerStatus['authentication']['required'] ?? false) === true
+                && ($workerStatus['authentication']['verified'] ?? false) !== true) {
+                $this->toolAuthentication->requireReauthentication($session->tool_slug, 'TOOL_AUTH_LOST');
+                $this->terminateSession($session, 'tool_auth_lost', true);
+                throw $this->toolAuthentication->reauthRequired();
             }
 
             $session->forceFill(['last_heartbeat_at' => now()])->save();
