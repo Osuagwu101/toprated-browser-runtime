@@ -10,6 +10,13 @@ function html(response, body) {
   response.end(body);
 }
 
+function hasCookie(request, expected) {
+  return String(request.headers.cookie || '')
+    .split(';')
+    .map((value) => value.trim())
+    .includes(expected);
+}
+
 const server = http.createServer((request, response) => {
   const requestUrl = new URL(request.url || '/', `http://127.0.0.1:${port}`);
 
@@ -32,21 +39,15 @@ const server = http.createServer((request, response) => {
   }
 
   if (requestUrl.pathname === '/stealthwriter/dashboard') {
-    html(response, `<!doctype html><html><head><meta charset="utf-8"><title>STEALTHWRITER_CHECKING</title></head><body>
-      <main id="app" data-tool="stealthwriter"></main>
-      <script>
-        const cookieOk = document.cookie.split(';').map(v => v.trim()).includes('stealthwriter-session=valid');
-        const localOk = localStorage.getItem('stealthwriter-auth') === 'shared-valid';
-        if (!(cookieOk && localOk)) {
-          location.replace('/stealthwriter/sign-in');
-        } else {
-          document.title = 'STEALTHWRITER_AUTHENTICATED';
-          const app = document.getElementById('app');
-          app.setAttribute('data-authenticated', 'true');
-          app.textContent = 'Stealthwriter authenticated workspace';
-        }
-      </script>
-    </body></html>`);
+    if (!hasCookie(request, 'stealthwriter-session=valid')) {
+      response.writeHead(302, {
+        location: '/stealthwriter/sign-in',
+        'cache-control': 'no-store, max-age=0',
+      });
+      response.end();
+      return;
+    }
+    html(response, '<!doctype html><html><head><title>STEALTHWRITER_AUTHENTICATED</title></head><body><main data-tool="stealthwriter" data-authenticated="true">Stealthwriter authenticated workspace</main></body></html>');
     return;
   }
 
