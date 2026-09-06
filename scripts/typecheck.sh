@@ -14,10 +14,11 @@ while IFS= read -r -d '' file; do
 done < <(find api -type f -name '*.php' -not -path '*/vendor/*' -print0 | sort -z)
 
 printf 'python_compile_check=begin\n'
-python3 -m py_compile tests/*.py
+python3 -m py_compile tests/*.py scripts/*.py
 
 printf 'json_validation=begin\n'
 python3 -m json.tool api/composer.json >/dev/null
+python3 -m json.tool api/config/tool-profiles.json >/dev/null
 python3 -m json.tool browser-worker/package.json >/dev/null
 
 printf 'compose_validation=begin\n'

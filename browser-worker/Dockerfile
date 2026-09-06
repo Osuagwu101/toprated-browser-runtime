@@ -1,8 +1,9 @@
 FROM node:22-bookworm-slim
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 update \
+    && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 install -y --no-install-recommends chromium curl ca-certificates
 
 WORKDIR /srv/browser-worker
 COPY browser-worker/package.json ./package.json

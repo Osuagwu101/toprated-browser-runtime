@@ -31,9 +31,22 @@ final class BrowserWorkerClient
         return $this->request('GET', '/browser/sessions/'.rawurlencode($workerSessionId), null, true, true);
     }
 
-    public function start(?string $launchUrl): array
-    {
-        return $this->request('POST', '/browser/sessions', $launchUrl === null ? [] : ['url' => $launchUrl]);
+    public function start(
+        string $launchUrl,
+        ?array $browserState = null,
+        array $browserStatePolicy = [],
+        array $authentication = [],
+    ): array {
+        $payload = [
+            'url' => $launchUrl,
+            'browserStatePolicy' => $browserStatePolicy,
+            'authentication' => $authentication,
+        ];
+        if ($browserState !== null) {
+            $payload['browserState'] = $browserState;
+        }
+
+        return $this->request('POST', '/browser/sessions', $payload);
     }
 
     public function stop(string $workerSessionId): array
@@ -80,10 +93,20 @@ final class BrowserWorkerClient
         }
 
         if (! $response->successful()) {
+            $workerCode = is_string($response->json('code')) ? $response->json('code') : null;
+            if ($workerCode === 'BROWSER_STATE_INVALID') {
+                throw new RuntimeApiException('BROWSER_STATE_INVALID', 422, 'The browser worker rejected the authorized browser state.');
+            }
+            if ($workerCode === 'AUTHENTICATION_NOT_VERIFIED') {
+                throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
+            }
+
             [$code, $status] = match ($response->status()) {
                 401 => ['WORKER_AUTH_FAILED', 502],
                 404 => ['WORKER_SESSION_MISSING', 404],
                 410 => ['WORKER_SESSION_GONE', 410],
+                413 => ['BROWSER_STATE_TOO_LARGE', 413],
+                422 => ['WORKER_REQUEST_INVALID', 502],
                 429 => ['WORKER_CAPACITY_FULL', 429],
                 409 => ['WORKER_BUSY', 409],
                 default => ['WORKER_ERROR', 502],

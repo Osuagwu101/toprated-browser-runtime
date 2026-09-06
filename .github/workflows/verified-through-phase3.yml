@@ -8,6 +8,7 @@ on:
       - phase5-session-isolation
       - phase6-lifecycle-management
       - phase7-tool-profiles
+      - phase8-phrasly-reference
       - main
   workflow_dispatch:
 
@@ -54,8 +55,8 @@ jobs:
             echo 'Unsafe raw CDP exposure pattern found.' >&2
             exit 1
           fi
-          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config; then
-            echo 'Production runtime contains tool-specific Phrasly logic.' >&2
+          if grep -R --line-number -i 'phrasly' browser-worker/src api/app api/routes api/config/browser.php; then
+            echo 'Generic runtime core contains tool-specific Phrasly logic.' >&2
             exit 1
           fi
 
