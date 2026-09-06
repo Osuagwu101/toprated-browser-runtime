@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib import error, parse, request
 
 API = os.environ.get("API_BASE", "http://127.0.0.1:18080").rstrip("/")
+WORKER = os.environ.get("WORKER_BASE", "").rstrip("/")
 WRITER = os.environ.get("PHASE8_ACCEPTANCE_WRITER", "phase8-real-phrasly")
 STATE_FILE = os.environ.get("PHRASLY_STATE_FILE", "")
 SERVICE_SECRET = os.environ.get("RUNTIME_SERVICE_AUTH_SECRET", "").encode()
@@ -128,6 +129,11 @@ def decode_grant(grant: dict):
     except Exception:
         die("Viewer grant token payload is malformed.")
     viewer_url = parse.urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+    if WORKER:
+        worker = parse.urlsplit(WORKER)
+        if not worker.scheme or not worker.netloc:
+            die("WORKER_BASE must be an absolute URL when set.")
+        viewer_url = parse.urlunsplit((worker.scheme, worker.netloc, parts.path, parts.query, ""))
     return token, payload, viewer_url
 
 
