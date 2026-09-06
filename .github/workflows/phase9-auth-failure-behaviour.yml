@@ -115,6 +115,9 @@ jobs:
           assert w['viewer']['rawCdpExposed'] is False, w
           PY
 
+      - name: Preserve Phase 1-3 browser and viewer regression
+        run: node browser-worker/test/standalone-migration.e2e.mjs
+
       - name: Preserve Phase 4 Laravel ownership regression
         run: python3 tests/phase4-e2e.py
 
