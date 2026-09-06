@@ -123,6 +123,36 @@ jobs:
       - name: Phase 7 configured generic tool E2E
         run: python3 tests/phase7-e2e.py
 
+      - name: Re-establish clean worker boundary before inherited Phase 6 regression
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const secret = process.env.WORKER_CONTROL_SECRET;
+          fetch('http://127.0.0.1:8081/browser/sessions', {
+            headers: { 'x-worker-control-secret': secret },
+          }).then(async (response) => {
+            const payload = await response.json();
+            if (!response.ok || payload.activeCount !== 0 || payload.startingCount !== 0) {
+              console.error(JSON.stringify({ status: response.status, activeCount: payload.activeCount, startingCount: payload.startingCount }));
+              process.exit(1);
+            }
+            console.log('phase7_pre_phase6_worker_sessions=0');
+          }).catch((error) => {
+            console.error(String(error.message || error));
+            process.exit(1);
+          });
+          NODE
+          docker compose restart browser-worker
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase7-phase6-worker-health.json; then
+              cat /tmp/phase7-phase6-worker-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color browser-worker || true
+          exit 1
+
       - name: Start autonomous Phase 6 lifecycle reaper
         run: |
           set -euo pipefail
