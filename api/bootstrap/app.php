@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\RuntimeApiException;
+use App\Http\Middleware\VerifyOperatorRequest;
 use App\Http\Middleware\VerifyServiceRequest;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -16,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'service.auth' => VerifyServiceRequest::class,
+            'operator.auth' => VerifyOperatorRequest::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
