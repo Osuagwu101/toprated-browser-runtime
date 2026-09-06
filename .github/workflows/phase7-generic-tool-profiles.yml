@@ -129,7 +129,7 @@ jobs:
           docker compose exec -T browser-worker node - <<'NODE'
           const secret = process.env.WORKER_CONTROL_SECRET;
           fetch('http://127.0.0.1:8081/browser/sessions', {
-            headers: { 'x-worker-control-secret': secret },
+            headers: { 'x-toprated-worker-secret': secret },
           }).then(async (response) => {
             const payload = await response.json();
             if (!response.ok || payload.activeCount !== 0 || payload.startingCount !== 0) {
