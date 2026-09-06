@@ -299,7 +299,7 @@ Severity: High / gate blockers.
 
 Underlying causes and corrections are recorded in `docs/audits/phase-8.md`. The deterministic mechanism is CI-verified; the real Phrasly gate remains pending owner-operated authentication.
 
-Status: **IMPLEMENTED / CI-VERIFIED; LIVE PHRASLY PROOF PENDING**.
+Status: **FIXED / LIVE-VERIFIED; FINAL EXACT-HEAD CI PENDING**.
 
 ### SB-008-006 — Cloud browser could not establish the real Phrasly state because Cloudflare verification did not complete
 
@@ -316,3 +316,22 @@ Security controls: runtime operator service and worker-control secrets are requi
 Evidence: exact implementation head `57182a5f4cbcc654981fda7bbf565ad7b8d7ae03` passed all six authoritative workflows: Verified Through Phase 3 `33945655810`, Phase 4 `33945655788`, Phase 5 `33945655813`, Phase 6 `33945655770`, Phase 7 `33945655773`, and Phase 8 `33945655774`.
 
 Status: **IMPLEMENTED / CI-VERIFIED; OWNER-OPERATED LIVE LOGIN STILL REQUIRED**.
+
+
+### SB-008-007 — Acceptance harness ignored the configured worker origin
+
+Severity: High / exit-gate test blocker.
+
+Observed: the first containerized live acceptance attempt created the self-hosted session but failed with `Authenticated viewer status could not be read from the self-hosted browser.`
+
+Underlying cause: `scripts/phase8-phrasly-acceptance.py` accepted `WORKER_BASE` operationally but read the viewer grant's loopback URL unchanged. Inside the temporary acceptance container, `127.0.0.1:18081` addressed that container rather than the Windows-hosted browser worker.
+
+Corrective action: commit `8a5a6ac35c2449d0e0ec77935077969d8755f0f9` preserves the signed viewer path/query/token and substitutes only the configured absolute worker origin. The corrected harness produced a live `PASS` at `https://phrasly.ai/dashboard`, with authentication verified before viewer grant and no raw state printed.
+
+Status: **FIXED / LIVE-VERIFIED**.
+
+## Phase 8 technical gate
+
+On 2026-09-06, the corrected acceptance harness used the active production-managed shared state to launch a fresh self-hosted Chromium. It returned `PASS` for Phrasly at `https://phrasly.ai/dashboard`, confirmed authenticated state, confirmed viewer access occurred after verification, and printed no raw state.
+
+The Master Blueprint v1.1 Phase 8 exit gate is technically satisfied. Phase 8 is **TECHNICALLY GREEN — AWAITING FINAL EXACT-HEAD CI AND OWNER APPROVAL**. Phase 9 remains **NOT STARTED**.
