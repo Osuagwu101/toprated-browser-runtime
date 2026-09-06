@@ -14,6 +14,30 @@ const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
 
+let sessionCreatesInFlight = 0;
+let sessionCreatesSettled = Promise.resolve();
+let releaseSessionCreates = null;
+
+function beginSessionCreate() {
+  if (sessionCreatesInFlight === 0) {
+    sessionCreatesSettled = new Promise((resolve) => { releaseSessionCreates = resolve; });
+  }
+  sessionCreatesInFlight += 1;
+}
+function endSessionCreate() {
+  sessionCreatesInFlight = Math.max(0, sessionCreatesInFlight - 1);
+  if (sessionCreatesInFlight === 0 && releaseSessionCreates) {
+    const release = releaseSessionCreates;
+    releaseSessionCreates = null;
+    release();
+  }
+}
+async function waitForSessionCreatesToSettle() {
+  while (sessionCreatesInFlight > 0) {
+    await sessionCreatesSettled;
+  }
+}
+
 function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-age=0', pragma: 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...extra }; }
 function writeJson(response, statusCode, payload) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8' })); response.end(JSON.stringify(payload)); }
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', 'content-security-policy': `default-src 'none'; img-src 'self' blob: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`, 'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()', 'cross-origin-opener-policy': 'same-origin', 'cross-origin-resource-policy': 'same-origin', 'x-frame-options': 'DENY' })); response.end(html); }
@@ -43,15 +67,25 @@ const server = http.createServer(async (request, response) => {
     if (requestUrl.pathname.startsWith('/browser/')) authorizeWorkerControl(request);
 
     // Session-scoped lifecycle API used by Laravel. Sensitive browser state is accepted only on this private, authenticated creation path and is never logged or returned.
-    if (request.method === 'GET' && requestUrl.pathname === '/browser/sessions') return writeJson(response, 200, controller.listStatus());
+    if (request.method === 'GET' && requestUrl.pathname === '/browser/sessions') {
+      await waitForSessionCreatesToSettle();
+      return writeJson(response, 200, controller.listStatus());
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/sessions') {
       const body = await readJson(request, sessionCreateMaxBytes);
       assertSessionCreateBody(body);
-      return writeJson(response, 201, await controller.start(body.url, {
-        browserState: body.browserState,
-        browserStatePolicy: body.browserStatePolicy,
-        authentication: body.authentication,
-      }));
+      beginSessionCreate();
+      try {
+        const created = await controller.start(body.url, {
+          browserState: body.browserState,
+          browserStatePolicy: body.browserStatePolicy,
+          authentication: body.authentication,
+        });
+        writeJson(response, 201, created);
+        return;
+      } finally {
+        endSessionCreate();
+      }
     }
     const browserSessionRoute = matchBrowserSessionRoute(requestUrl.pathname);
     if (browserSessionRoute) {
