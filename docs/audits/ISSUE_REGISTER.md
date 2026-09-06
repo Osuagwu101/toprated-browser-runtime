@@ -335,3 +335,16 @@ Status: **FIXED / LIVE-VERIFIED**.
 On 2026-09-06, the corrected acceptance harness used the active production-managed shared state to launch a fresh self-hosted Chromium. It returned `PASS` for Phrasly at `https://phrasly.ai/dashboard`, confirmed authenticated state, confirmed viewer access occurred after verification, and printed no raw state.
 
 The Master Blueprint v1.1 Phase 8 exit gate is technically satisfied. Owner approval was received on 2026-09-06. PR #11 was merged to `main` at `31a4ac77fdc4851d4b8da32b2c9643b6c0979cef`; all six authoritative workflows passed on that exact promoted SHA. Phase 8 is **GREEN / COMPLETE / APPROVED**. Phase 9 remains **NOT STARTED**.
+
+
+### SB-008-008 — Final completion-ledger validation exposed Phase 7 composite worker-state leakage
+
+Severity: High / inherited-regression blocker.
+
+Observed: on final `main` completion-ledger head `12060854c351232b9ed313e45c337030208af2a4`, Phase 7 Generic Tool Profiles run `34007830712` failed on attempts 1 and 2. In both attempts, repository syntax, Phase 7 static/unit gates, Phase 4 ownership, Phase 5 isolation and the Phase 7 configured-tool E2E passed. The inherited Phase 6 suite then received HTTP 500 instead of 201 while launching its untracked-worker cleanup fixture. Teardown still passed. The other five authoritative workflows passed on the same SHA.
+
+Underlying cause: the Phase 7 workflow composed Phase 4, Phase 5 and Phase 7 browser suites and then immediately ran the full inherited Phase 6 lifecycle suite against the same long-lived worker process. The standalone Phase 6 workflow passed on the same SHA, isolating the failure to cumulative cross-suite Chromium worker state rather than the Phase 6 lifecycle behavior itself.
+
+Corrective action: the Phase 7 workflow now requires the private worker session inventory to report zero active and zero starting sessions after the Phase 7 E2E, restarts only the browser-worker container to re-establish the clean process boundary used by the standalone Phase 6 gate, waits for worker health, and then starts the reaper and executes the unchanged inherited Phase 6 E2E. The zero-session assertion prevents the restart from concealing a tracked-session cleanup defect.
+
+Status: **FIX IMPLEMENTED — EXACT-HEAD CI VERIFICATION REQUIRED**.
