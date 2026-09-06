@@ -440,3 +440,57 @@ The Phase 9 composite explicitly includes the full Phase 1–3 browser/viewer be
 The Master Blueprint v1.1 Phase 9 exit gate — **“Failure behaviour matches the admin-only authentication model”** — is technically satisfied. This register update is committed together with final workflow cleanup, including removal of the temporary Phase 9 branch trigger from inherited workflows. Under the repository engineering contract, the resulting documentation/closure `main` head must itself pass all seven authoritative workflows before the technical closure record becomes effective.
 
 After that final exact-head validation, Phase 9 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. Phase 10 remains **NOT STARTED** until the owner explicitly approves Phase 9 completion.
+
+
+# Phase 10 multi-tool deterministic E2E corrections
+
+### SB-010-004 — Empty storage namespace failed across PHP-to-Node transport
+
+Severity: High / gate blocker.
+
+RED evidence: runs `34031829988`, `34031938360` and `34048255568`.
+
+Underlying cause: an empty JSON object became an empty PHP array and later a JSON `[]`; both generic validators rejected the semantically empty Web Storage namespace.
+
+Corrective action: accept only an empty array as the transport representation of an empty map at both boundaries; retain rejection of non-empty lists; add a worker unit regression.
+
+Status: **FIXED / VERIFIED**.
+
+### SB-010-005 — Worker HTTP timeout raced authentication verification
+
+Severity: High / gate blocker.
+
+RED evidence: run `34048427437`.
+
+Underlying cause: both the client request and profile verification expired at 15 seconds, converting expected `AUTHENTICATION_NOT_VERIFIED` into `WORKER_UNAVAILABLE`.
+
+Corrective action: derive the generic start-request timeout from the profile auth timeout plus bounded overhead, with a 60-second cap.
+
+Status: **FIXED / VERIFIED**.
+
+### SB-010-006 — Tool auth latch preceded cross-tool ownership rejection
+
+Severity: High / gate blocker.
+
+RED evidence: run `34048616454`.
+
+Corrective action: reject cross-tool switching for an already-active writer before checking the requested tool latch; same-tool launches still enforce the latch before reuse.
+
+Status: **FIXED / VERIFIED**.
+
+## Phase 10 technical evidence
+
+Corrected composite run `34048813657` passed on `7625483dbdccd9741408d92694fbe07786e1753b`.
+
+Exact verification SHA `362e650b71bbf85c2a592431a3099989d0b76910` passed all authoritative workflows:
+
+- Phase 1–3 `34049104655`;
+- Phase 4 `34049104646`;
+- Phase 5 `34049104643`;
+- Phase 6 `34049104664`;
+- Phase 7 `34049104642`;
+- Phase 8 `34049104657`;
+- Phase 9 `34049104660`;
+- Phase 10 `34049104639`.
+
+Phase 10 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. It is not merged or COMPLETE, and Phase 11 has not started.

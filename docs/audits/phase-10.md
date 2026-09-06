@@ -1,6 +1,6 @@
-# Phase 10 Audit — Second-tool validation (SneakWrite)
+# Phase 10 Audit — Multi-tool validation
 
-Status: **IN TEST**.
+Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
 
 ## Phase anchor
 
@@ -8,7 +8,8 @@ Status: **IN TEST**.
 - Last phase marked COMPLETE: **Phase 9 — Authentication-Failure Behaviour**.
 - Blueprint: **Master Blueprint v1.1**.
 - Verified Phase 10 baseline: standalone `main` at `4cf9966adc4d38ca5695311bc39540e1f281b6a0`.
-- Isolated implementation branch: `phase10-second-tool-validation`.
+- Initial implementation branch: `phase10-second-tool-validation`.
+- Multi-tool verification branch: `phase10-multi-tool-one-click-auth`.
 
 Blueprint exit gate:
 
@@ -122,3 +123,79 @@ Phase 10 is not green merely because the profile exists. The authoritative Phase
 The implementation has passed one complete composite execution. The documentation update changes the branch head, so the Phase 10 workflow must pass again on the resulting exact branch SHA before promotion. After promotion, all authoritative workflows must pass on the resulting `main` head. Phase 10 remains **IN TEST** until those gates are complete.
 
 **STATUS: IN TEST**
+
+
+## Authenticated multi-tool portability extension
+
+Phase 10 now validates three non-Phrasly tool profiles through the same generic runtime:
+
+- SneakWrite proves a named external profile that does not require shared authenticated state.
+- StealthWriter proves shared-state launch plus URL-based authentication verification.
+- ChatGPT proves shared-state launch plus selector-based authentication verification.
+
+StealthWriter and ChatGPT are Phase 10 validation profiles. Their inclusion proves that browser-state injection, authentication latching, operator recovery, writer ownership, viewer fail-closed behavior and cleanup are driven by profile configuration rather than Phrasly-specific runtime branches. This does not integrate the standalone provider into the production website; that remains Phase 15.
+
+### SB-010-004 — Empty Web Storage namespaces failed across the PHP-to-Node transport boundary
+
+Severity: **HIGH / deterministic gate blocker**.
+
+Observed RED evidence:
+
+- run `34031829988` on `e204a180449ec2ed3fd3de039996c9250ed40167`;
+- run `34031938360` on `f5033015c573cb84fd3d19f8e434faf3fe565639`;
+- run `34048255568` on `96f043cddaac6c94b96732284fee6eb13f09a791`.
+
+The Phase 10 stale StealthWriter state was valid and intentionally localStorage-only. PHP represents an empty decoded JSON object as an empty array. The API first rejected that value as a list; after the API-side correction, its normalized empty array was serialized to the Node worker as `[]`, where the worker rejected it again.
+
+Correction: both generic normalization boundaries now accept only the empty array transport representation as an empty storage map. Non-empty arrays remain invalid. A worker unit regression proves empty-array acceptance and non-empty-array rejection. Production validation was not weakened for non-empty lists.
+
+Status: **FIXED / VERIFIED**.
+
+### SB-010-005 — Worker start timeout raced the configured authentication timeout
+
+Severity: **HIGH / failure-contract blocker**.
+
+Observed RED evidence: run `34048427437` on `074b1c31852dc05e94f408807a9031b3e9e80ce4` returned `WORKER_UNAVAILABLE` after the worker spent the configured 15 seconds proving stale authentication.
+
+Underlying cause: Laravel's generic worker HTTP timeout and the tool profile's authentication-verification timeout were both 15 seconds. The client timed out at the same boundary where the worker needed to return `AUTHENTICATION_NOT_VERIFIED`.
+
+Correction: browser-start request timeout is now derived generically from the profile authentication timeout plus bounded startup/cleanup overhead, capped at 60 seconds. Ordinary worker reads retain the existing 15-second timeout.
+
+Status: **FIXED / VERIFIED**.
+
+### SB-010-006 — Authentication latch preceded cross-tool writer ownership
+
+Severity: **HIGH / ownership-contract blocker**.
+
+Observed RED evidence: run `34048616454` on `fab0c9ee92c8d35df232b2bdca96cffe03a2771a` returned the StealthWriter auth outage to a writer who already owned an active ChatGPT session, instead of rejecting the cross-tool switch with `WRITER_SESSION_ACTIVE`.
+
+Correction: SessionManager now rejects an active writer's cross-tool switch before evaluating the requested tool's auth latch. Same-tool access still evaluates the latch before reuse, so an authentication outage cannot be bypassed and no second Chromium is started.
+
+Status: **FIXED / VERIFIED**.
+
+## Corrected implementation evidence
+
+Candidate head `7625483dbdccd9741408d92694fbe07786e1753b` passed the full Phase 10 composite in run `34048813657`.
+
+Exact verification head `362e650b71bbf85c2a592431a3099989d0b76910` then passed all eight authoritative workflows:
+
+- Verified Through Phase 3 — `34049104655` — SUCCESS;
+- Phase 4 Laravel Session API — `34049104646` — SUCCESS;
+- Phase 5 Session Isolation — `34049104643` — SUCCESS;
+- Phase 6 Lifecycle Management — `34049104664` — SUCCESS;
+- Phase 7 Generic Tool Profiles — `34049104642` — SUCCESS;
+- Phase 8 Phrasly Reference Implementation — `34049104657` — SUCCESS;
+- Phase 9 Authentication-Failure Behaviour — `34049104660` — SUCCESS;
+- Phase 10 Second-Tool Validation — `34049104639` — SUCCESS.
+
+The Phase 10 workflow proves SneakWrite, StealthWriter and ChatGPT through the same generic API/worker/viewer lifecycle, including shared-state requirements, rejection of writer credentials, independent per-tool auth outages, URL- and selector-based verification, reuse without state retransmission, cross-tool ownership, live-auth-loss fail-closed behavior, operator recovery, sensitive-log scans and zero browser/profile residue.
+
+## Final technical gate
+
+Blueprint exit gate: **“Provider is demonstrably general-purpose, not Phrasly-only.”**
+
+Result: **SATISFIED / TECHNICALLY GREEN**.
+
+Phase 10 is not COMPLETE until explicit owner approval and controlled promotion. Phase 11 has not started.
+
+**STATUS: TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
