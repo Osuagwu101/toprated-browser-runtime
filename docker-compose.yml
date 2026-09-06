@@ -27,6 +27,7 @@ services:
       SESSION_STARTUP_GRACE_SECONDS: ${SESSION_STARTUP_GRACE_SECONDS:-30}
       SESSION_REAPER_INTERVAL_SECONDS: ${SESSION_REAPER_INTERVAL_SECONDS:-30}
       BROWSER_STATE_MAX_BYTES: ${BROWSER_STATE_MAX_BYTES:-262144}
+      TOOL_PROFILES_PATH: ${TOOL_PROFILES_PATH:-/srv/runtime-api/config/tool-profiles.json}
     ports:
       - "127.0.0.1:${API_PORT:-18080}:8080"
     volumes:
@@ -72,6 +73,7 @@ services:
       SESSION_STARTUP_GRACE_SECONDS: ${SESSION_STARTUP_GRACE_SECONDS:-30}
       SESSION_REAPER_INTERVAL_SECONDS: ${SESSION_REAPER_INTERVAL_SECONDS:-30}
       BROWSER_STATE_MAX_BYTES: ${BROWSER_STATE_MAX_BYTES:-262144}
+      TOOL_PROFILES_PATH: ${TOOL_PROFILES_PATH:-/srv/runtime-api/config/tool-profiles.json}
     volumes:
       - runtime-data:/srv/runtime-api/storage/data
     depends_on:
