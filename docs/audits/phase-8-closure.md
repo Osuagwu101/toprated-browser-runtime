@@ -108,3 +108,10 @@ All six authoritative workflows passed on that resulting `main` SHA, attempt 1:
 - Phase 8 Phrasly Reference Implementation — run `34007646109` — **SUCCESS**.
 
 Phase 8 is therefore **GREEN / COMPLETE / APPROVED**. Phase 9 — Authentication-Failure Behaviour — is now eligible under the Blueprint sequence but remains **NOT STARTED** until explicit instruction.
+
+
+## Final completion-ledger validation incident
+
+Final ledger head `12060854c351232b9ed313e45c337030208af2a4` produced five successful authoritative workflows and a reproducible red Phase 7 composite workflow run `34007830712` on attempts 1 and 2. Both failures occurred in the unchanged inherited Phase 6 orphan-worker fixture after the Phase 4, Phase 5 and Phase 7 suites had already passed against the same long-lived worker. The standalone Phase 6 workflow passed on the same SHA.
+
+The failure is retained as SB-008-008. The Phase 7 workflow now asserts zero tracked worker sessions, re-establishes a clean browser-worker process boundary, waits for health, and then executes the inherited Phase 6 suite unchanged. This correction does not skip, retry, or weaken any lifecycle assertion. Phase 8 completion remains conditional on all six workflows passing on the exact head containing this correction.
