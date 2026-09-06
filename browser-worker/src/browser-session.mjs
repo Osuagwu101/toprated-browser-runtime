@@ -11,6 +11,14 @@ export const VIEWPORT_HEIGHT = 900;
 export const MAX_SUPPORTED_BROWSER_SESSIONS = 15;
 export const RUNTIME_PHASE = 6;
 
+export function normalizeBrowserDisplayMode(value) {
+  const mode = String(value || 'headless').trim().toLowerCase();
+  if (!['headless', 'virtual-display'].includes(mode)) {
+    throw new Error('BROWSER_DISPLAY_MODE must be headless or virtual-display.');
+  }
+  return mode;
+}
+
 export function validateNavigationUrl(value) {
   const raw = String(value || DEFAULT_TEST_URL).trim();
   let parsed;
@@ -108,10 +116,12 @@ function killProcessGroup(groupId, signal) { try { process.kill(-groupId, signal
 async function waitForExit(processRef, timeoutMs) { if (processRef.exitCode !== null || processRef.signalCode !== null) return true; return new Promise((resolve) => { const timer = setTimeout(() => resolve(false), timeoutMs); processRef.once('exit', () => { clearTimeout(timer); resolve(true); }); }); }
 
 export class BrowserSessionController {
-  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3) } = {}) {
+  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run' } = {}) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SUPPORTED_BROWSER_SESSIONS) throw new Error(`MAX_BROWSER_SESSIONS must be an integer between 1 and ${MAX_SUPPORTED_BROWSER_SESSIONS}.`);
     this.executablePath = executablePath;
     this.maxSessions = maxSessions;
+    this.displayMode = normalizeBrowserDisplayMode(displayMode);
+    this.xvfbRunPath = xvfbRunPath;
     this.sessions = new Map();
     this.startingCount = 0;
   }
@@ -138,6 +148,7 @@ export class BrowserSessionController {
       title: session.title,
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       viewer: 'restricted',
+      displayMode: this.displayMode,
       authentication: { required: session.authenticationRequired === true, verified: session.authenticationVerified === true },
     };
   }
@@ -161,10 +172,16 @@ export class BrowserSessionController {
     this.pruneExited();
     if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
     if (!existsSync(this.executablePath)) throw new Error(`Chromium executable not found: ${this.executablePath}`);
+    if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
     const userDataDir = mkdtempSync(join(tmpdir(), 'toprated-browser-'));
-    const browserProcess = spawn(this.executablePath, ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    const chromiumArgs = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'];
+    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
+    const launcherArgs = this.displayMode === 'virtual-display'
+      ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
+      : ['--headless=new', ...chromiumArgs];
+    const browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
     try {

@@ -27,6 +27,7 @@ env:
   SESSION_STARTUP_GRACE_SECONDS: 5
   SESSION_REAPER_INTERVAL_SECONDS: 1
   BROWSER_STATE_MAX_BYTES: 262144
+  BROWSER_DISPLAY_MODE: virtual-display
   TOOL_PROFILES_PATH: /srv/runtime-api/config/tool-profiles.phase10-ci.json
 
 jobs:
