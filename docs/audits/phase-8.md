@@ -1,6 +1,6 @@
 # Phase 8 Audit — Phrasly Reference Implementation
 
-Status: **IN TEST — REAL PHRASLY SHARED-STATE PROOF PENDING**
+Status: **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**
 
 Phase anchor:
 
@@ -80,7 +80,7 @@ Underlying cause: deterministic CI can prove the generic mechanism but cannot ma
 
 Correction prepared: `scripts/phase8-phrasly-acceptance.py` reads the shared state from a local permission-restricted JSON file, submits it through the signed service API, verifies that the self-hosted browser remains on an authenticated Phrasly dashboard, proves viewer access occurs only after authentication verification, closes the browser, and never prints the raw state.
 
-Status: **OPEN — owner-controlled live state evidence required before Phase 8 can reach AWAITING APPROVAL**.
+Status: **FIXED / LIVE-VERIFIED**.
 
 ## Security boundary
 
@@ -146,9 +146,9 @@ An unauthenticated request to `https://phrasly.ai/dashboard` currently redirects
 
 ## Gate decision
 
-The **mechanism is VERIFIED** on the deterministic Phase 8 fixture and every inherited gate is green. The **Blueprint exit gate is not yet fully satisfied**, because no live authorized Phrasly shared state has yet been exercised through the standalone runtime in this phase record.
+The deterministic mechanism and inherited gates are verified. On 2026-09-06, the live acceptance harness exercised the active production-managed Phrasly shared state through a fresh self-hosted Chromium and returned `PASS`: authentication was verified, the final safe location was `https://phrasly.ai/dashboard`, viewer access was granted only after verification, and raw state was not printed.
 
-Phase 8 remains **IN TEST**. Phase 9 is **NOT STARTED**.
+The Blueprint exit gate is therefore technically satisfied. Phase 8 is **TECHNICALLY GREEN — AWAITING OWNER APPROVAL**. Phase 9 is **NOT STARTED**.
 
 
 ## Approved temporary admin-authentication amendment
@@ -198,3 +198,26 @@ Evidence on `c6285ac3e74dbbdc1c32ceab7c6c18a6ef5bd15e`:
 - Phase 8 Phrasly Reference Implementation — run `33945908128`, attempt 2 — **SUCCESS**.
 
 This evidence clears the deterministic regression concern. It does not satisfy the live Phrasly exit gate.
+
+
+## Live Phrasly exit-gate evidence — 2026-09-06
+
+The active Phrasly shared-state row was read from the production application's Lovable-managed database through the authenticated Lovable connector. Only metadata was inspected in ordinary output: provider `browser_use`, verification status `active`, and 29 cookies. The raw cookies, Web Storage and headers were never printed.
+
+For transfer to the owner's Windows test host, the selected state was encrypted in the managed database with AES-256-CBC using a one-time random key. The encrypted artifact was downloaded, decrypted only into the owner's temporary directory, copied into an ephemeral Python container, and restricted to mode `0600`. The acceptance harness submitted only the Phase 8-approved state fields through the signed control plane.
+
+First live attempt on harness head `7949b303f92e0d658582bf07b234f6a16addf9da` failed honestly after session creation because the harness accepted `WORKER_BASE` but did not use it when reading the viewer status. From the ephemeral test container, the viewer grant's loopback host therefore referred to the test container rather than the Windows-hosted worker.
+
+Corrective commit `8a5a6ac35c2449d0e0ec77935077969d8755f0f9` makes the harness preserve the signed viewer path/query/token while substituting the explicitly configured absolute `WORKER_BASE` origin. No production runtime behavior, Phrasly profile, authentication state or viewer authorization rule was weakened.
+
+The owner reran `scripts/phase8-phrasly-acceptance.py` against the corrected head. Safe result:
+
+- `result`: `PASS`;
+- `phase`: `8`;
+- `tool`: `phrasly`;
+- `authenticated`: `true`;
+- `location`: `https://phrasly.ai/dashboard`;
+- `viewerGrantedAfterAuth`: `true`;
+- `rawStatePrinted`: `false`.
+
+This satisfies the Master Blueprint v1.1 Phase 8 exit gate: **one self-hosted Chromium reaches authenticated Phrasly from shared state**. Final exact-head CI evidence is still required before owner approval is requested.
