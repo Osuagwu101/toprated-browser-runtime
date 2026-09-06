@@ -60,14 +60,18 @@ function assertSessionCreateBody(body) {
   const allowed = new Set(['url', 'browserState', 'browserStatePolicy', 'authentication']);
   for (const key of Object.keys(body)) if (!allowed.has(key)) throw Object.assign(new Error('Browser session request contains unsupported fields.'), { statusCode: 422 });
 }
-async function assertLiveToolAuthentication(sessionId) {
+async function refreshLiveToolAuthentication(sessionId) {
   const session = controller.assertSession(sessionId);
   const policy = sessionAuthenticationPolicies.get(sessionId);
-  if (!policy || policy.required !== true) return;
+  if (!policy || policy.required !== true) return { required: false, verified: true };
   const authentication = await checkAuthentication(session.cdp, policy);
   session.authenticationRequired = authentication.required === true;
   session.authenticationVerified = authentication.verified === true;
-  if (authentication.verified !== true) {
+  return authentication;
+}
+async function assertViewerToolAuthentication(sessionId) {
+  const authentication = await refreshLiveToolAuthentication(sessionId);
+  if (authentication.required === true && authentication.verified !== true) {
     throw Object.assign(
       new Error('This tool is temporarily unavailable while an administrator refreshes authentication.'),
       { statusCode: 423, code: 'TOOL_REAUTH_REQUIRED' },
@@ -113,7 +117,7 @@ const server = http.createServer(async (request, response) => {
     if (browserSessionRoute) {
       const { sessionId, action } = browserSessionRoute;
       if (request.method === 'GET' && action === 'status') {
-        await assertLiveToolAuthentication(sessionId);
+        await refreshLiveToolAuthentication(sessionId);
         return writeJson(response, 200, controller.getStatus(sessionId));
       }
       if (request.method === 'GET' && action === 'authorized-state') return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
@@ -146,7 +150,7 @@ const server = http.createServer(async (request, response) => {
       const { sessionId, action } = viewerRoute;
       if (request.method === 'GET' && action === 'shell') { controller.assertSession(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
       authorizeViewer(request, sessionId);
-      await assertLiveToolAuthentication(sessionId);
+      await assertViewerToolAuthentication(sessionId);
       if (request.method === 'GET' && action === 'status') return writeJson(response, 200, await controller.refreshMetadata(sessionId));
       if (request.method === 'GET' && action === 'frame') { const frame = await controller.captureFrame(sessionId); response.writeHead(200, commonHeaders({ 'content-type': 'image/jpeg', 'content-length': String(frame.length), 'cross-origin-resource-policy': 'same-origin' })); response.end(frame); return; }
       if (request.method === 'POST' && action === 'input') { const body = await readJson(request, 8 * 1024); return writeJson(response, 200, await controller.sendViewerInput(sessionId, body)); }
