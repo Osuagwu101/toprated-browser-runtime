@@ -11,20 +11,40 @@ export function normalizeRateLimit(value, name, fallback) {
 }
 
 export class FixedWindowRateLimiter {
-  constructor({ limit, windowMs = 60000, now = () => Date.now() } = {}) {
+  constructor({ limit, windowMs = 60000, maxBuckets = 4096, now = () => Date.now() } = {}) {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('Rate limit must be a positive integer.');
     if (!Number.isInteger(windowMs) || windowMs < 1000) throw new Error('Rate limit window must be at least one second.');
+    if (!Number.isInteger(maxBuckets) || maxBuckets < 1 || maxBuckets > 100000) throw new Error('Rate limit maxBuckets must be an integer between 1 and 100000.');
     this.limit = limit;
     this.windowMs = windowMs;
+    this.maxBuckets = maxBuckets;
     this.now = now;
     this.buckets = new Map();
+  }
+
+  pruneExpired(now) {
+    for (const [key, bucket] of this.buckets.entries()) {
+      if (now < bucket.startedAt || now - bucket.startedAt >= this.windowMs) this.buckets.delete(key);
+    }
+  }
+
+  capacityRetryAfter(now) {
+    let earliestExpiry = Infinity;
+    for (const bucket of this.buckets.values()) earliestExpiry = Math.min(earliestExpiry, bucket.startedAt + this.windowMs);
+    return Number.isFinite(earliestExpiry)
+      ? Math.max(1, Math.ceil((earliestExpiry - now) / 1000))
+      : Math.max(1, Math.ceil(this.windowMs / 1000));
   }
 
   hit(subject) {
     const key = String(subject || 'unknown');
     const now = this.now();
+    this.pruneExpired(now);
     let bucket = this.buckets.get(key);
-    if (!bucket || now - bucket.startedAt >= this.windowMs || now < bucket.startedAt) {
+    if (!bucket) {
+      if (this.buckets.size >= this.maxBuckets) {
+        return { allowed: false, remaining: 0, retryAfterSeconds: this.capacityRetryAfter(now) };
+      }
       bucket = { startedAt: now, hits: 0 };
       this.buckets.set(key, bucket);
     }
