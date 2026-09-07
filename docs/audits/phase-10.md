@@ -1,6 +1,6 @@
 # Phase 10 Audit — Multi-tool validation
 
-Status: **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**.
+Status: **COMPLETE / OWNER APPROVED**.
 
 ## Phase anchor
 
@@ -239,6 +239,19 @@ No claim is made that the runtime defeats Cloudflare or guarantees automation of
 
 ## Owner approval
 
-The owner explicitly approved Phase 10 in the project conversation on 2026-09-07 after reviewing the configuration-driven tool-profile meaning and the exact-head evidence. Phase 11 remains **NOT STARTED** until separately initiated.
+The owner explicitly approved Phase 10 in the project conversation on 2026-09-07 after reviewing the configuration-driven tool-profile meaning and the exact-head evidence. Phase 10 was promoted through PR #12 to `main` at merge SHA `8f9fc24e14b18e633f138ebb5c646712c9a6b6de`.
 
-**STATUS: TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**
+All eight authoritative workflows passed on that exact `main` head:
+
+- Verified Through Phase 3 — `34081524612` — SUCCESS;
+- Phase 4 Laravel Session API — `34081524750` — SUCCESS;
+- Phase 5 Session Isolation — `34081524578` — SUCCESS;
+- Phase 6 Lifecycle Management — `34081524811` — SUCCESS;
+- Phase 7 Generic Tool Profiles — `34081524731` — SUCCESS;
+- Phase 8 Phrasly Reference Implementation — `34081524949` — SUCCESS;
+- Phase 9 Authentication-Failure Behaviour — `34081524648` — SUCCESS;
+- Phase 10 Second-Tool Validation — `34081524813` — SUCCESS.
+
+Material red-run and provider-incompatibility history remains preserved. Phase 11 remains **NOT STARTED** until separately initiated.
+
+**STATUS: COMPLETE / OWNER APPROVED**

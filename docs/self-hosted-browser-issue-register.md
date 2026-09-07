@@ -492,7 +492,7 @@ Exact verification SHA `362e650b71bbf85c2a592431a3099989d0b76910` passed all aut
 - Phase 9 `34049104660`;
 - Phase 10 `34049104639`.
 
-Phase 10 is **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**. The owner approved the phase on 2026-09-07; merge and exact-main-head validation remain before final COMPLETE status. Phase 11 has not started.
+Phase 10 is **COMPLETE / OWNER APPROVED**. The owner approved the phase on 2026-09-07; merge and exact-main-head validation remain before final COMPLETE status. Phase 11 has not started.
 
 ### SB-010-007 — Requested live validation providers rejected the managed browser at their security-verification boundary
 
@@ -552,4 +552,15 @@ Status: **FIXED / VERIFIED**.
 
 ## Phase 10 gate status
 
-Phase 10 is **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**. The owner explicitly approved the verified technical gate in the project conversation after reviewing the meaning of configuration-driven tool profiles. The provider is demonstrably profile-driven and general-purpose rather than Phrasly-only. The production Browser Use path remains outside this standalone branch and Phase 11 has not started.
+Phase 10 is **COMPLETE / OWNER APPROVED**. The owner explicitly approved the verified technical gate in the project conversation after reviewing the meaning of configuration-driven tool profiles. The provider is demonstrably profile-driven and general-purpose rather than Phrasly-only. The production Browser Use path remains outside this standalone branch and Phase 11 has not started.
+
+
+## Phase 10 promotion closure
+
+Owner approval: **2026-09-07**.
+
+Promotion: PR #12 merged the approved branch into `main` at `8f9fc24e14b18e633f138ebb5c646712c9a6b6de`.
+
+Exact-main-head regression evidence: Phase 1–3 `34081524612`, Phase 4 `34081524750`, Phase 5 `34081524578`, Phase 6 `34081524811`, Phase 7 `34081524731`, Phase 8 `34081524949`, Phase 9 `34081524648`, and Phase 10 `34081524813` — all SUCCESS.
+
+Status: **PHASE 10 COMPLETE / OWNER APPROVED**. Phase 11 remains **NOT STARTED**.
