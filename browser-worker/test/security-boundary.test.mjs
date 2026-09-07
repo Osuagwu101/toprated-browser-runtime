@@ -23,6 +23,22 @@ test('fixed-window rate limiting rejects overflow and resets cleanly', () => {
   assert.throws(() => normalizeRateLimit('0', 'TEST_LIMIT', 5), /between 1 and 100000/);
 });
 
+test('fixed-window rate limiting bounds subject churn and prunes expired buckets', () => {
+  let now = 1000;
+  const limiter = new FixedWindowRateLimiter({ limit: 5, windowMs: 1000, maxBuckets: 2, now: () => now });
+  assert.equal(enforceRateLimit(limiter, 'client-a').remaining, 4);
+  assert.equal(enforceRateLimit(limiter, 'client-b').remaining, 4);
+  assert.equal(limiter.buckets.size, 2);
+  assert.throws(
+    () => enforceRateLimit(limiter, 'client-c'),
+    (error) => error.statusCode === 429 && error.code === 'RATE_LIMITED' && error.retryAfterSeconds >= 1,
+  );
+  assert.equal(limiter.buckets.size, 2);
+  now = 2000;
+  assert.equal(enforceRateLimit(limiter, 'client-c').remaining, 4);
+  assert.equal(limiter.buckets.size, 1);
+});
+
 test('request boundary rejects query ambiguity and unsupported fields', () => {
   assert.doesNotThrow(() => assertNoQuery(new URL('http://worker/browser/status')));
   assert.throws(() => assertNoQuery(new URL('http://worker/browser/status?debug=1')), (error) => error.code === 'REQUEST_QUERY_FORBIDDEN');
