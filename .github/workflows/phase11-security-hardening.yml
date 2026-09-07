@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase11-security-hardening
+      - phase11-security-hardening-v2
       - main
   workflow_dispatch:
 
@@ -48,8 +49,11 @@ jobs:
         run: |
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
+          test -f browser-worker/src/session-policy-store.mjs
           test -f tests/phase11-security-e2e.py
           test -f docs/audits/phase-11.md
+          grep -F "viewerClientRateLimiter" browser-worker/src/server.mjs
+          grep -F "maxBuckets" browser-worker/src/rate-limit.mjs
           grep -F "runtime.security:service" api/routes/api.php
           grep -F "runtime.security:operator" api/routes/api.php
           grep -F -- "--remote-debugging-address=127.0.0.1" browser-worker/src/browser-session.mjs
