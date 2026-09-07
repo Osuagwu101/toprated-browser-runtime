@@ -22,6 +22,20 @@ final class EnforceRuntimeRequestPolicy
             throw new RuntimeApiException('REQUEST_POLICY_MISCONFIGURED', 503, 'Runtime request policy is not configured.');
         }
 
+        $limit = max(1, (int) config("browser.{$scope}_rate_limit_per_minute", $scope === 'operator' ? 60 : 600));
+        $subject = (string) ($request->ip() ?: 'unknown');
+        $rate = $this->rateLimiter->hit($scope, $subject, $limit);
+        if (! $rate['allowed']) {
+            return new JsonResponse([
+                'status' => 'error',
+                'code' => 'RATE_LIMITED',
+                'message' => 'Runtime request rate limit exceeded.',
+            ], 429, [
+                'Retry-After' => (string) $rate['retryAfter'],
+                'Cache-Control' => 'no-store, max-age=0',
+            ]);
+        }
+
         if ($request->getQueryString() !== null) {
             throw new RuntimeApiException('REQUEST_QUERY_FORBIDDEN', 400, 'Protected runtime routes do not accept query parameters.');
         }
@@ -50,20 +64,6 @@ final class EnforceRuntimeRequestPolicy
             if (! is_object($decoded)) {
                 throw new RuntimeApiException('MALFORMED_REQUEST', 400, 'Runtime request body must be a JSON object.');
             }
-        }
-
-        $limit = max(1, (int) config("browser.{$scope}_rate_limit_per_minute", $scope === 'operator' ? 60 : 600));
-        $subject = (string) ($request->ip() ?: 'unknown');
-        $rate = $this->rateLimiter->hit($scope, $subject, $limit);
-        if (! $rate['allowed']) {
-            return new JsonResponse([
-                'status' => 'error',
-                'code' => 'RATE_LIMITED',
-                'message' => 'Runtime request rate limit exceeded.',
-            ], 429, [
-                'Retry-After' => (string) $rate['retryAfter'],
-                'Cache-Control' => 'no-store, max-age=0',
-            ]);
         }
 
         return $next($request);
