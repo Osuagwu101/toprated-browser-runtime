@@ -6,6 +6,7 @@ import { checkAuthentication, normalizeAuthenticationPolicy } from './browser-st
 import { readBearerToken, resolveViewerSecret, verifyViewerToken } from './viewer-auth.mjs';
 import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './rate-limit.mjs';
 import { assertAllowedFields, assertNoQuery, readJson } from './request-security.mjs';
+import { SessionPolicyStore } from './session-policy-store.mjs';
 import { buildViewerHtml } from './viewer-page.mjs';
 
 const port = Number(process.env.PORT || 8081);
@@ -16,7 +17,7 @@ const controller = new BrowserSessionController();
 const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
-const sessionAuthenticationPolicies = new Map();
+const sessionAuthenticationPolicies = new SessionPolicyStore({ maxEntries: controller.maxSessions });
 const workerControlRateLimiter = new FixedWindowRateLimiter({
   limit: normalizeRateLimit(process.env.WORKER_CONTROL_RATE_LIMIT_PER_MINUTE, 'WORKER_CONTROL_RATE_LIMIT_PER_MINUTE', 600),
   maxBuckets: 1024,
@@ -50,10 +51,7 @@ async function waitForSessionCreatesToSettle() {
   while (sessionCreatesInFlight > 0) await sessionCreatesSettled;
 }
 function pruneSessionAuthenticationPolicies() {
-  const liveSessionIds = new Set(controller.listStatus().sessions.map((session) => session.sessionId));
-  for (const sessionId of sessionAuthenticationPolicies.keys()) {
-    if (!liveSessionIds.has(sessionId)) sessionAuthenticationPolicies.delete(sessionId);
-  }
+  sessionAuthenticationPolicies.reconcile(controller.listStatus().sessions.map((session) => session.sessionId));
 }
 const policyPruneTimer = setInterval(pruneSessionAuthenticationPolicies, 60000);
 policyPruneTimer.unref();
