@@ -110,6 +110,10 @@ final class BrowserWorkerClient
             if ($workerCode === 'AUTHENTICATION_NOT_VERIFIED') {
                 throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
             }
+            if (in_array($workerCode, ['BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT'], true)) {
+                $status = $workerCode === 'BROWSER_NAVIGATION_TIMEOUT' ? 504 : 502;
+                throw new RuntimeApiException($workerCode, $status, 'The browser worker could not reach an interactive tool page.');
+            }
 
             [$code, $status] = match ($response->status()) {
                 401 => ['WORKER_AUTH_FAILED', 502],

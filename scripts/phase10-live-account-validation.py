@@ -41,8 +41,12 @@ TOOLS = {
 }
 
 
+def progress(stage):
+    print(json.dumps({"result": "PROGRESS", "tool": TOOL, "stage": stage}), flush=True)
+
+
 def die(message):
-    print(json.dumps({"result": "FAIL", "tool": TOOL, "reason": message}), file=sys.stderr)
+    print(json.dumps({"result": "FAIL", "tool": TOOL, "reason": message}), file=sys.stderr, flush=True)
     raise SystemExit(1)
 
 
@@ -154,7 +158,7 @@ def close_session(session_id, writer):
         pass
 
 
-def wait_for_admin(ready_file):
+def wait_for_admin(ready_file, viewer_opened=False):
     print(json.dumps({
         "result": "WAITING_FOR_ADMIN_LOGIN",
         "tool": TOOL,
@@ -163,6 +167,7 @@ def wait_for_admin(ready_file):
         "timeoutSeconds": LOGIN_TIMEOUT_SECONDS,
         "credentialsPrinted": False,
         "rawStatePrinted": False,
+        "viewerOpenedAutomatically": viewer_opened,
     }), flush=True)
 
     if sys.stdin.isatty():
@@ -234,7 +239,14 @@ def main():
     bootstrap_id = None
     proof_id = None
     try:
+        progress("PREFLIGHT_RUNTIME")
+        code, capacity = signed("GET", "/api/capacity", BOOTSTRAP_WRITER)
+        if code != 200 or capacity.get("workerHealthy") is not True:
+            die("Standalone runtime preflight failed.")
+
+        progress("RESTORE_OPERATOR_BOUNDARY")
         operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
+        progress("START_ADMIN_BROWSER")
         code, bootstrap = signed("POST", "/api/sessions", BOOTSTRAP_WRITER, {
             "writer_id": BOOTSTRAP_WRITER,
             "tool_slug": TOOLS[TOOL]["bootstrap"],
@@ -248,8 +260,16 @@ def main():
             die("Administrator browser identity is missing.")
 
         secure_write(LINK_FILE, viewer_link + "\n")
-        wait_for_admin(READY_FILE)
+        viewer_opened = False
+        if os.name == "nt":
+            try:
+                os.startfile(viewer_link)
+                viewer_opened = True
+            except OSError:
+                viewer_opened = False
+        wait_for_admin(READY_FILE, viewer_opened)
 
+        progress("CAPTURE_AUTHORIZED_STATE")
         code, state = worker_json(
             "GET",
             f"/browser/sessions/{parse.quote(worker_session_id)}/authorized-state",
@@ -261,6 +281,7 @@ def main():
         bootstrap_id = None
         LINK_FILE.unlink(missing_ok=True)
 
+        progress("START_FRESH_PROOF_BROWSER")
         code, restored = operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
         if code != 200 or restored.get("status") != "ready":
             die("Operator recovery boundary could not prepare the live proof.")
@@ -292,6 +313,7 @@ def main():
         if code != 200 or reused.get("reused") is not True or reused.get("sessionId") != proof_id:
             die("Live authenticated session was not reusable without state retransmission.")
 
+        progress("VERIFY_FRESH_AUTHENTICATION")
         safe = parse.urlsplit(str(status.get("url") or ""))
         safe_location = parse.urlunsplit((safe.scheme, safe.netloc, safe.path, "", ""))
         close_session(proof_id, PROOF_WRITER)

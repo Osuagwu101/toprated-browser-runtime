@@ -19,6 +19,14 @@ export function normalizeBrowserDisplayMode(value) {
   return mode;
 }
 
+export function normalizeBrowserNavigationTimeoutMs(value) {
+  const timeout = Number(value || 45000);
+  if (!Number.isInteger(timeout) || timeout < 5000 || timeout > 120000) {
+    throw new Error('BROWSER_NAVIGATION_TIMEOUT_MS must be an integer between 5000 and 120000.');
+  }
+  return timeout;
+}
+
 export function validateNavigationUrl(value) {
   const raw = String(value || DEFAULT_TEST_URL).trim();
   let parsed;
@@ -116,12 +124,13 @@ function killProcessGroup(groupId, signal) { try { process.kill(-groupId, signal
 async function waitForExit(processRef, timeoutMs) { if (processRef.exitCode !== null || processRef.signalCode !== null) return true; return new Promise((resolve) => { const timer = setTimeout(() => resolve(false), timeoutMs); processRef.once('exit', () => { clearTimeout(timer); resolve(true); }); }); }
 
 export class BrowserSessionController {
-  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run' } = {}) {
+  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SUPPORTED_BROWSER_SESSIONS) throw new Error(`MAX_BROWSER_SESSIONS must be an integer between 1 and ${MAX_SUPPORTED_BROWSER_SESSIONS}.`);
     this.executablePath = executablePath;
     this.maxSessions = maxSessions;
     this.displayMode = normalizeBrowserDisplayMode(displayMode);
     this.xvfbRunPath = xvfbRunPath;
+    this.navigationTimeoutMs = normalizeBrowserNavigationTimeoutMs(navigationTimeoutMs);
     this.sessions = new Map();
     this.startingCount = 0;
   }
@@ -184,9 +193,12 @@ export class BrowserSessionController {
     const browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
+    let failureStage = 'cdp-port';
     try {
       const port = await waitForDevToolsPort(userDataDir, browserProcess);
+      failureStage = 'cdp-target';
       const target = await findPageTarget(port);
+      failureStage = 'cdp-connect';
       const cdp = new CdpClient(target.webSocketDebuggerUrl);
       await cdp.connect(); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
       await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT, deviceScaleFactor: 1, mobile: false });
@@ -205,13 +217,16 @@ export class BrowserSessionController {
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
 
+      failureStage = 'state-install';
       const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
       this.assertSession(sessionId).authorizedStateAllowedHosts = bootstrap.allowedHosts;
       try {
+        failureStage = 'navigation';
         await this.navigate(sessionId, safeUrl);
       } finally {
         await removeBrowserStateBootstrap(cdp, bootstrap.scriptIdentifier);
       }
+      failureStage = 'authentication';
       const authentication = await verifyAuthentication(cdp, options?.authentication || {});
       const session = this.assertSession(sessionId);
       session.authenticationRequired = authentication.required === true;
@@ -223,7 +238,9 @@ export class BrowserSessionController {
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
-      if (error?.code) wrapped.code = error.code;
+      const safeCode = error?.code || (failureStage === 'navigation' ? 'BROWSER_NAVIGATION_FAILED' : 'BROWSER_LAUNCH_FAILED');
+      wrapped.code = safeCode;
+      console.error(JSON.stringify({ event: 'browser_start_failed', stage: failureStage, code: safeCode }));
       throw wrapped;
     } finally { this.startingCount -= 1; }
   }
@@ -234,7 +251,33 @@ export class BrowserSessionController {
     const value = evaluation.result?.value || {}; session.url = String(value.url || session.url || 'about:blank'); session.title = String(value.title || '');
     return { ...this.present(session), readyState: String(value.readyState || '') };
   }
-  async navigate(sessionId, url) { const session = this.assertSession(sessionId); const safeUrl = validateNavigationUrl(url); const loadEvent = session.cdp.waitForEvent('Page.loadEventFired', 10000); const result = await session.cdp.send('Page.navigate', { url: safeUrl }, 10000); if (result.errorText) throw new Error(`Chromium navigation failed: ${result.errorText}`); await loadEvent; return { ...(await this.refreshMetadata(sessionId)), control: 'cdp' }; }
+  async navigate(sessionId, url) {
+    const session = this.assertSession(sessionId);
+    const safeUrl = validateNavigationUrl(url);
+    try {
+      const result = await session.cdp.send('Page.navigate', { url: safeUrl }, 10000);
+      if (result.errorText) {
+        throw Object.assign(new Error('Chromium rejected the navigation request.'), { statusCode: 502, code: 'BROWSER_NAVIGATION_FAILED' });
+      }
+
+      const deadline = Date.now() + this.navigationTimeoutMs;
+      while (Date.now() <= deadline) {
+        const ready = await session.cdp.send('Runtime.evaluate', {
+          expression: 'String(document.readyState || "")',
+          returnByValue: true,
+        }, 5000);
+        const state = String(ready?.result?.value || '');
+        if (state === 'interactive' || state === 'complete') {
+          return { ...(await this.refreshMetadata(sessionId)), control: 'cdp' };
+        }
+        await sleep(250);
+      }
+      throw Object.assign(new Error('Chromium navigation did not become interactive in time.'), { statusCode: 504, code: 'BROWSER_NAVIGATION_TIMEOUT' });
+    } catch (error) {
+      if (error?.code) throw error;
+      throw Object.assign(new Error('Chromium navigation failed.'), { statusCode: 502, code: 'BROWSER_NAVIGATION_FAILED' });
+    }
+  }
   async navigateOnly(url) { return this.navigate(this.onlySessionId(), url); }
   async captureFrame(sessionId) { const session = this.assertSession(sessionId); const result = await session.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, fromSurface: true, captureBeyondViewport: false }, 10000); if (!result.data) throw new Error('Chromium did not return a viewer frame.'); return Buffer.from(result.data, 'base64'); }
   async sendViewerInput(sessionId, input) {

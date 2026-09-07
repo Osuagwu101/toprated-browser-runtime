@@ -158,7 +158,7 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
     const statusCode = Number(error?.statusCode || 500);
-    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED'].includes(String(error?.code || '')) ? String(error.code) : null;
+    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT'].includes(String(error?.code || '')) ? String(error.code) : null;
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) });
   }
 });
