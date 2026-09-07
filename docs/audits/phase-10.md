@@ -1,6 +1,6 @@
 # Phase 10 Audit — Multi-tool validation
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
+Status: **IN TEST — deterministic gates green; live authenticated portability externally blocked**.
 
 ## Phase anchor
 
@@ -194,8 +194,55 @@ The Phase 10 workflow proves SneakWrite, StealthWriter and ChatGPT through the s
 
 Blueprint exit gate: **“Provider is demonstrably general-purpose, not Phrasly-only.”**
 
-Result: **SATISFIED / TECHNICALLY GREEN**.
+Result under the repository's deterministic CI criterion: **SATISFIED / TECHNICALLY GREEN**.
 
-Phase 10 is not COMPLETE until explicit owner approval and controlled promotion. Phase 11 has not started.
+The owner additionally requires a real third-party account to complete authenticated-state capture and reuse before Phase 10 can be approved. That stronger live criterion is not satisfied. Phase 10 is not COMPLETE, and Phase 11 has not started.
 
-**STATUS: TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
+## Owner-operated live-account audit — 2026-09-07
+
+Live validation was performed on branch head `3de398c3538509a1bee75dea8909dfd9f6a52160` after the following generic corrections were implemented and regression-tested:
+
+- multi-host state export retained allowed-domain cookies required by profiles such as ChatGPT;
+- headed virtual-display startup installed the required Xvfb authentication dependency;
+- navigation became readiness-based with explicit safe failure stages and aligned request/startup time budgets;
+- the live harness gained progress output and Windows viewer auto-open behavior;
+- administrator bootstrap viewer grants received a bounded 900-second lifetime while ordinary writer grants remained 300 seconds.
+
+All eight authoritative workflows passed on exact head `3de398c3538509a1bee75dea8909dfd9f6a52160`:
+
+- Phase 1–3 `34075450744`;
+- Phase 4 `34075450739`;
+- Phase 5 `34075450741`;
+- Phase 6 `34075450753`;
+- Phase 7 `34075450869`;
+- Phase 8 `34075450748`;
+- Phase 9 `34075450751`;
+- Phase 10 `34075450745`.
+
+### ChatGPT live result
+
+The protected viewer launched ChatGPT and accepted owner interaction. After account sign-in was attempted, the provider returned an HTML security challenge where the authentication route expected its normal response, including `Route Error (400 Invalid content type: text/html; charset=UTF-8)`. The subsequent `auth.openai.com` Cloudflare human-verification challenge repeatedly failed inside the self-hosted Chromium. No authenticated state was captured or reused.
+
+Result: **BLOCKED BY PROVIDER SECURITY VERIFICATION**.
+
+### StealthWriter live result
+
+The protected viewer launched the StealthWriter sign-in page and accepted owner interaction. Its embedded Cloudflare challenge returned **Verification failed** after credentials were entered. No authenticated state was captured or reused.
+
+Result: **BLOCKED BY PROVIDER SECURITY VERIFICATION**.
+
+No challenge bypass, fingerprint spoofing, cookie extraction from an unrelated browser, credential logging or security-control weakening was attempted. Repeated retries are stopped because they cannot provide legitimate phase evidence and may increase provider risk scoring.
+
+### Live gate disposition
+
+- generic multi-tool architecture and deterministic authenticated-state behavior — **PASS**;
+- unauthenticated live launch/viewer interaction for ChatGPT and StealthWriter — **PASS**;
+- authenticated live state capture and fresh-browser reuse for ChatGPT — **NOT VERIFIED / EXTERNALLY BLOCKED**;
+- authenticated live state capture and fresh-browser reuse for StealthWriter — **NOT VERIFIED / EXTERNALLY BLOCKED**.
+
+Phase 10 remains **IN TEST** until either:
+
+1. a different legitimate third-party account tool completes the same generic live capture/reuse gate; or
+2. the owner explicitly accepts a documented deterministic-only exception.
+
+**STATUS: IN TEST — EXTERNAL PROVIDER BLOCKER OPEN**

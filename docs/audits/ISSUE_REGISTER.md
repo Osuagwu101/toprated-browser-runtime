@@ -257,7 +257,6 @@ Status: **FIXED / CLOSED**.
 ## Phase 7 closure
 
 The Phase 7 exit gate — **“The runtime can launch a generic configured tool without Phrasly-specific branching in core infrastructure”** — is satisfied.
-
 Final documented Phase 7 branch head: `a6a17e43c1109533a1230c719b2524455837a8d4`.
 
 All five authoritative workflows passed on that exact branch SHA:
@@ -494,3 +493,30 @@ Exact verification SHA `362e650b71bbf85c2a592431a3099989d0b76910` passed all aut
 - Phase 10 `34049104639`.
 
 Phase 10 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. It is not merged or COMPLETE, and Phase 11 has not started.
+
+### SB-010-007 — Requested live providers reject the self-hosted browser at their security-verification boundary
+
+Severity: High / owner-required live exit-gate blocker.
+
+Observed on 2026-09-07 at exact runtime head `3de398c3538509a1bee75dea8909dfd9f6a52160`:
+
+- ChatGPT loaded in the protected viewer and accepted owner interaction, but its post-login authentication route received an HTML Cloudflare challenge and reported `Route Error (400 Invalid content type: text/html; charset=UTF-8)`; subsequent `auth.openai.com` human verification repeatedly failed.
+- StealthWriter loaded its sign-in page in the protected viewer and accepted owner interaction, but its embedded Cloudflare control returned `Verification failed` after the owner entered credentials.
+- Neither attempt produced captured authenticated state or a fresh-browser reuse proof.
+
+Audit history preceding the final provider result:
+
+- an initial local invocation selected an internal Python executable and returned `No pyvenv.cfg file`; selecting the installed top-level Python 3.12.10 executable corrected the harness invocation;
+- stale multi-host ChatGPT state exposed allowed-domain cookie filtering and led to the generic multi-host state-export correction;
+- `WORKER_ERROR` startup failures led to readiness-based navigation, safe stage logging and aligned navigation/request/startup timeouts;
+- the initial 300-second administrator viewer grant expired during manual login and led to the bounded 900-second administrator-bootstrap grant while ordinary writer grants remained 300 seconds.
+
+Exact-head deterministic evidence after those corrections: Phase 1–3 `34075450744`, Phase 4 `34075450739`, Phase 5 `34075450741`, Phase 6 `34075450753`, Phase 7 `34075450869`, Phase 8 `34075450748`, Phase 9 `34075450751`, and Phase 10 `34075450745` — all SUCCESS.
+
+Disposition: the runtime reaches both real providers and the generic deterministic state machinery remains green, but the owner-required live authenticated-state capture/reuse criterion is not met. Provider challenges will not be bypassed, spoofed or weakened. Repeated retries are stopped.
+
+Status: **OPEN / EXTERNALLY BLOCKED**.
+
+## Phase 10 live-gate status
+
+Phase 10 is **IN TEST**. Deterministic CI is technically green, but no real third-party account has completed authenticated-state capture and fresh-browser reuse for the strengthened owner-required live criterion. Owner approval and Phase 11 remain blocked.
