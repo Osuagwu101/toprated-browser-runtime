@@ -27,6 +27,23 @@ function hostMatches(candidate, allowed) {
   return Boolean(left && right && (left === right || left.endsWith(`.${right}`)));
 }
 
+export function filterAuthorizedCookies(cookies = [], allowedHosts = [], currentHost = '') {
+  if (!Array.isArray(cookies)) return [];
+  const hosts = [...new Set(
+    (Array.isArray(allowedHosts) ? allowedHosts : [])
+      .map(normalizeHost)
+      .filter(Boolean),
+  )];
+  const fallbackHost = normalizeHost(currentHost);
+  if (!hosts.length && fallbackHost) hosts.push(fallbackHost);
+
+  return cookies.filter((cookie) => {
+    if (!cookie || typeof cookie !== 'object' || Array.isArray(cookie)) return false;
+    const domain = normalizeHost(cookie.domain || fallbackHost);
+    return Boolean(domain && hosts.some((host) => hostMatches(domain, host)));
+  });
+}
+
 function normalizeAllowedHosts(policy, launchUrl) {
   const raw = policy?.allowedHosts ?? [];
   if (!Array.isArray(raw) || raw.length > 20) fail('Browser-state host policy is invalid.');
@@ -55,7 +72,10 @@ export function normalizeBrowserState(browserState, policy = {}, launchUrl) {
   const required = policy?.required === true;
   if (browserState == null) {
     if (required) fail('Authorized browser state is required.');
-    return { state: null, allowedHosts: [] };
+    const configuredHosts = policy?.allowedHosts ?? [];
+    if (!Array.isArray(configuredHosts)) fail('Browser-state host policy is invalid.');
+    const allowedHosts = configuredHosts.length ? normalizeAllowedHosts(policy, launchUrl) : [];
+    return { state: null, allowedHosts };
   }
   if (!browserState || typeof browserState !== 'object' || Array.isArray(browserState)) fail('Authorized browser state must be an object.');
 
@@ -124,7 +144,7 @@ export function normalizeAuthenticationPolicy(value = {}) {
 
 export async function installBrowserState(cdp, browserState, policy, launchUrl) {
   const { state, allowedHosts } = normalizeBrowserState(browserState, policy, launchUrl);
-  if (!state) return { scriptIdentifier: null, injected: false };
+  if (!state) return { scriptIdentifier: null, injected: false, allowedHosts };
 
   await cdp.send('Network.enable');
   if (state.cookies.length) {
@@ -150,7 +170,7 @@ export async function installBrowserState(cdp, browserState, policy, launchUrl) 
     try { for(const [key,value] of Object.entries(session)) sessionStorage.setItem(key,value); } catch {}
   })();`;
   const bootstrap = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
-  return { scriptIdentifier: bootstrap?.identifier || null, injected: true };
+  return { scriptIdentifier: bootstrap?.identifier || null, injected: true, allowedHosts };
 }
 
 export async function removeBrowserStateBootstrap(cdp, scriptIdentifier) {

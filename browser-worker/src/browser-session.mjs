@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
+import { filterAuthorizedCookies, installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
 
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
@@ -201,10 +201,12 @@ export class BrowserSessionController {
         title: '',
         authenticationRequired: options?.authentication?.required === true,
         authenticationVerified: false,
+        authorizedStateAllowedHosts: [],
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
 
       const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
+      this.assertSession(sessionId).authorizedStateAllowedHosts = bootstrap.allowedHosts;
       try {
         await this.navigate(sessionId, safeUrl);
       } finally {
@@ -273,10 +275,11 @@ export class BrowserSessionController {
     let currentHost = '';
     try { currentHost = new URL(String(storage.url || session.url || '')).hostname.toLowerCase().replace(/^\.+|\.+$/g, ''); } catch {}
     if (!currentHost) throw Object.assign(new Error('Browser is not on an exportable HTTP(S) tool origin.'), { statusCode: 409 });
-    const scopedCookies = cookies.filter((cookie) => {
-      const domain = String(cookie.domain || currentHost).toLowerCase().replace(/^\.+|\.+$/g, '');
-      return domain === currentHost || currentHost.endsWith(`.${domain}`) || domain.endsWith(`.${currentHost}`);
-    });
+    const scopedCookies = filterAuthorizedCookies(
+      cookies,
+      session.authorizedStateAllowedHosts,
+      currentHost,
+    );
     return {
       authenticated_cookies: scopedCookies,
       session_tokens: {

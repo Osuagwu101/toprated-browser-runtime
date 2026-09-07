@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeAuthenticationPolicy, normalizeBrowserState } from '../src/browser-state.mjs';
+import { filterAuthorizedCookies, normalizeAuthenticationPolicy, normalizeBrowserState } from '../src/browser-state.mjs';
 
 test('normalizes bounded shared cookies and storage for an allowed host', () => {
   const result = normalizeBrowserState({
@@ -55,4 +55,36 @@ test('authentication policy remains generic and requires indicators', () => {
     selectorsAny: ['[data-auth=true]'],
     timeoutSeconds: 5,
   });
+});
+
+
+test('preserves authentication cookies across every configured tool host', () => {
+  const cookies = [
+    { name: 'chat-session', value: 'one', domain: '.chatgpt.com', path: '/' },
+    { name: 'openai-session', value: 'two', domain: 'auth.openai.com', path: '/' },
+    { name: 'host-only', value: 'three', path: '/' },
+    { name: 'unrelated', value: 'four', domain: 'accounts.google.com', path: '/' },
+  ];
+  const scoped = filterAuthorizedCookies(
+    cookies,
+    ['chatgpt.com', 'openai.com'],
+    'chatgpt.com',
+  );
+
+  assert.deepEqual(scoped.map((cookie) => cookie.name), [
+    'chat-session',
+    'openai-session',
+    'host-only',
+  ]);
+});
+
+test('retains configured export hosts for an operator bootstrap without input state', () => {
+  const result = normalizeBrowserState(
+    null,
+    { required: false, allowedHosts: ['chatgpt.com', 'openai.com'] },
+    'https://chatgpt.com/',
+  );
+
+  assert.equal(result.state, null);
+  assert.deepEqual(result.allowedHosts, ['chatgpt.com', 'openai.com']);
 });
