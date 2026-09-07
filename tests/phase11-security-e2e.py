@@ -153,12 +153,14 @@ probe = subprocess.run([
 ], check=True, capture_output=True, text=True)
 print(probe.stdout.strip())
 
+
 def viewer(method, url, token, obj=None):
     body = None if obj is None else json.dumps(obj, separators=(',', ':')).encode()
     headers = {'authorization': 'Bearer ' + token}
     if body is not None:
         headers['content-type'] = 'application/json'
     return call(request.Request(url, data=body, headers=headers, method=method))
+
 
 ok_status = viewer('GET', viewer_a + '/status', token_a)
 assert ok_status[0] == 200, ok_status
@@ -183,7 +185,7 @@ for method, path, obj in [
 
 assert_error(service('POST', f'/api/sessions/{session_a}/heartbeat', writer='phase11-writer-a', obj={'unexpected': True}), 422, 'REQUEST_BODY_FORBIDDEN')
 
-# Viewer limiting is independent from API control; overflow returns Retry-After.
+# Per-session viewer limiting returns Retry-After.
 viewer_limited = None
 for _ in range(40):
     result = viewer('GET', viewer_a + '/status', token_a)
@@ -192,6 +194,19 @@ for _ in range(40):
         break
 assert viewer_limited is not None, 'viewer rate limit did not engage'
 assert viewer_limited[2]['code'] == 'RATE_LIMITED' and int(header_value(viewer_limited[1], 'Retry-After')) >= 1, viewer_limited
+
+# Rotating attacker-controlled viewer UUIDs cannot evade the shared client budget.
+rotating_limited = None
+for index in range(100):
+    fake_session = f'00000000-0000-4000-8000-{index:012x}'
+    result = call(request.Request(WORKER + f'/viewer/{fake_session}', headers={'accept': 'application/json'}, method='GET'))
+    if result[0] == 429:
+        rotating_limited = result
+        break
+    assert result[0] == 410, result
+assert rotating_limited is not None, 'rotating viewer session IDs bypassed the client rate limit'
+assert rotating_limited[2].get('code') == 'RATE_LIMITED', rotating_limited
+assert int(header_value(rotating_limited[1], 'Retry-After')) >= 1, rotating_limited
 
 # Both sessions close through their owning identities and leave no worker state.
 assert service('DELETE', f'/api/sessions/{session_a}', writer='phase11-writer-a')[0] == 200
@@ -222,6 +237,7 @@ print(json.dumps({
     'serviceReplayRejected': True,
     'malformedRequestsRejected': True,
     'rateLimitsEnforced': True,
+    'viewerSessionRotationRejected': True,
     'rawCdpPubliclyExposed': False,
     'cleanupActiveSessions': 0,
 }))
