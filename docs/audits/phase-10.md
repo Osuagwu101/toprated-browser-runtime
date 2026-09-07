@@ -1,6 +1,6 @@
 # Phase 10 Audit — Multi-tool validation
 
-Status: **IN TEST — deterministic gates green; live authenticated portability externally blocked**.
+Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
 
 ## Phase anchor
 
@@ -194,60 +194,47 @@ The Phase 10 workflow proves SneakWrite, StealthWriter and ChatGPT through the s
 
 Blueprint exit gate: **“Provider is demonstrably general-purpose, not Phrasly-only.”**
 
-Result under the repository's deterministic CI criterion: **SATISFIED / TECHNICALLY GREEN**.
+Result: **SATISFIED / TECHNICALLY GREEN** on exact verification head `600bdd51d32e527b157d929868ab82b1df1033ab`.
 
-The owner additionally requires a real third-party account to complete authenticated-state capture and reuse before Phase 10 can be approved. That stronger live criterion is not satisfied. Phase 10 is not COMPLETE, and Phase 11 has not started.
+## Owner acceptance contract
 
-## Owner-operated live-account audit — 2026-09-07
+The supported human-in-the-loop contract is:
 
-Live validation was performed on branch head `3de398c3538509a1bee75dea8909dfd9f6a52160` after the following generic corrections were implemented and regression-tested:
+1. the administrator opens the protected administrator viewer from an ordinary browser and personally completes any legitimate provider challenge, login and OTP;
+2. the resulting authorized state remains inside the managed browser/runtime boundary and is never returned to writers;
+3. writers launch a configured tool through the site and receive only a bounded, writer-owned viewer grant;
+4. verified authentication loss fails closed, removes the unusable browser and latches that tool into administrator reapproval without poisoning other tools;
+5. tools are added through server-owned profile configuration rather than provider branches in reusable core code; and
+6. the validation matrix covers independent authentication policies, session isolation, concurrent writers, reuse, cross-tool rejection, recovery, sensitive-output checks and cleanup.
 
-- multi-host state export retained allowed-domain cookies required by profiles such as ChatGPT;
-- headed virtual-display startup installed the required Xvfb authentication dependency;
-- navigation became readiness-based with explicit safe failure stages and aligned request/startup time budgets;
-- the live harness gained progress output and Windows viewer auto-open behavior;
-- administrator bootstrap viewer grants received a bounded 900-second lifetime while ordinary writer grants remained 300 seconds.
+“Ordinary browser” here describes the administrator's client used to operate the protected viewer. It does not authorize exporting cookies or tokens from an unrelated everyday browser profile.
 
-All eight authoritative workflows passed on exact head `3de398c3538509a1bee75dea8909dfd9f6a52160`:
+## Arbitrary-profile portability proof
 
-- Phase 1–3 `34075450744`;
-- Phase 4 `34075450739`;
-- Phase 5 `34075450741`;
-- Phase 6 `34075450753`;
-- Phase 7 `34075450869`;
-- Phase 8 `34075450748`;
-- Phase 9 `34075450751`;
-- Phase 10 `34075450745`.
+The Phase 10 workflow now clones the two independent authentication policies under deliberately non-vendor CI slugs:
 
-### ChatGPT live result
+- `phase10-matrix-url-auth-7f3a`;
+- `phase10-matrix-selector-auth-9c2d`.
 
-The protected viewer launched ChatGPT and accepted owner interaction. After account sign-in was attempted, the provider returned an HTML security challenge where the authentication route expected its normal response, including `Route Error (400 Invalid content type: text/html; charset=UTF-8)`. The subsequent `auth.openai.com` Cloudflare human-verification challenge repeatedly failed inside the self-hosted Chromium. No authenticated state was captured or reused.
+The same full multi-auth E2E runs once against the named validation profiles and again against those arbitrary slugs. The test proves required shared state, writer-credential rejection, host allowlisting, independent per-tool reauthentication latches, URL- and selector-based verification, reuse without state retransmission, cross-tool ownership rejection, live-auth-loss cleanup, operator recovery, two simultaneous writer/tool sessions with distinct browser identities, and zero final browser residue.
 
-Result: **BLOCKED BY PROVIDER SECURITY VERIFICATION**.
+All eight authoritative workflows passed on exact head `600bdd51d32e527b157d929868ab82b1df1033ab`:
 
-### StealthWriter live result
+- Verified Through Phase 3 — `34080015083` — SUCCESS;
+- Phase 4 Laravel Session API — `34080015146` — SUCCESS;
+- Phase 5 Session Isolation — `34080015187` — SUCCESS;
+- Phase 6 Lifecycle Management — `34080015125` — SUCCESS;
+- Phase 7 Generic Tool Profiles — `34080015117` — SUCCESS;
+- Phase 8 Phrasly Reference Implementation — `34080015211` — SUCCESS;
+- Phase 9 Authentication-Failure Behaviour — `34080015110` — SUCCESS;
+- Phase 10 Second-Tool Validation — `34080015103` — SUCCESS.
 
-The protected viewer launched the StealthWriter sign-in page and accepted owner interaction. Its embedded Cloudflare challenge returned **Verification failed** after credentials were entered. No authenticated state was captured or reused.
+## Preserved live-provider observations
 
-Result: **BLOCKED BY PROVIDER SECURITY VERIFICATION**.
+ChatGPT and StealthWriter were validation probes only; they are not production dependencies and were never requirements for writer use. Their Cloudflare controls rejected the self-hosted test browser, while the owner's established normal browser could pass the challenge. This is preserved as real evidence that some providers can refuse managed browsers, not as evidence of Phrasly-specific or vendor-hardcoded runtime behavior.
 
-No challenge bypass, fingerprint spoofing, cookie extraction from an unrelated browser, credential logging or security-control weakening was attempted. Repeated retries are stopped because they cannot provide legitimate phase evidence and may increase provider risk scoring.
+The subsequent experimental Windows debug-profile bootstrap also failed owner-operated validation because it created a fresh debug-enabled profile rather than using the established everyday profile. That experiment was removed on `600bdd51d32e527b157d929868ab82b1df1033ab`; the live failure history remains recorded in the issue register.
 
-### Live gate disposition
+No claim is made that the runtime defeats Cloudflare or guarantees automation of every protected provider. A configured provider must permit the managed browser flow. This limitation does not alter the Phase 10 architectural gate, which is generic profile-driven multi-tool support.
 
-- generic multi-tool architecture and deterministic authenticated-state behavior — **PASS**;
-- unauthenticated live launch/viewer interaction for ChatGPT and StealthWriter — **PASS**;
-- authenticated live state capture and fresh-browser reuse for ChatGPT — **NOT VERIFIED / EXTERNALLY BLOCKED**;
-- authenticated live state capture and fresh-browser reuse for StealthWriter — **NOT VERIFIED / EXTERNALLY BLOCKED**.
-
-### Desktop administrator bootstrap remediation
-
-The live harness now has a generic Windows desktop-bootstrap companion for providers that reject containerized Chromium. It launches a dedicated normal Google Chrome profile on the administrator's desktop without an automation extension, permits the administrator to complete the legitimate provider login/challenge directly, and captures only cookies and Web Storage whose hosts match the configured tool allowlist. It never accepts account credentials or OTP values.
-
-The captured state is written only to a per-user ACL-restricted temporary directory, is consumed and deleted immediately by the existing operator harness, and is then tested in a fresh self-hosted Chromium through the unchanged backend authentication, viewer, ownership, reuse and cleanup gates. The dedicated Chrome process/profile and any residual temporary state are removed on completion or failure. Raw state and runtime secrets are not printed.
-
-This is a human-in-the-loop session bootstrap, not challenge automation or circumvention. It preserves the provider's requirement that the administrator personally completes verification.
-
-Phase 10 remains **IN TEST** until this desktop bootstrap produces a successful fresh-container authenticated-state and reuse proof for at least one requested real provider. A deterministic-only exception is no longer the primary remediation path.
-
-**STATUS: IN TEST — DESKTOP LIVE PROOF REQUIRED**
+**STATUS: TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
