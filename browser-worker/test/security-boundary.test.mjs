@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from '../src/rate-limit.mjs';
 import { assertAllowedFields, assertNoQuery, readJson } from '../src/request-security.mjs';
+import { SessionPolicyStore } from '../src/session-policy-store.mjs';
 
 function request(body, headers = {}) {
   const stream = new EventEmitter();
@@ -37,6 +38,24 @@ test('fixed-window rate limiting bounds subject churn and prunes expired buckets
   now = 2000;
   assert.equal(enforceRateLimit(limiter, 'client-c').remaining, 4);
   assert.equal(limiter.buckets.size, 1);
+});
+
+test('session authentication policy state is bounded and stale entries reconcile away', () => {
+  const store = new SessionPolicyStore({ maxEntries: 2 });
+  store.set('session-a', { required: true });
+  store.set('session-b', { required: false });
+  assert.equal(store.size, 2);
+  assert.throws(
+    () => store.set('session-c', { required: true }),
+    (error) => error.statusCode === 503 && error.code === 'SESSION_POLICY_CAPACITY',
+  );
+  assert.equal(store.reconcile(['session-b']), 1);
+  assert.equal(store.get('session-a'), undefined);
+  assert.deepEqual(store.get('session-b'), { required: false });
+  store.set('session-c', { required: true });
+  assert.equal(store.size, 2);
+  store.clear();
+  assert.equal(store.size, 0);
 });
 
 test('request boundary rejects query ambiguity and unsupported fields', () => {
