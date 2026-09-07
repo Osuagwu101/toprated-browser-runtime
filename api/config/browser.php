@@ -10,6 +10,7 @@ return [
     'viewer_token_ttl_seconds' => (int) env('VIEWER_TOKEN_TTL_SECONDS', 300),
     'viewer_public_base_url' => rtrim((string) env('VIEWER_PUBLIC_BASE_URL', 'http://127.0.0.1:18081'), '/'),
     'max_browser_sessions' => (int) env('MAX_BROWSER_SESSIONS', 3),
+    'navigation_timeout_ms' => (int) env('BROWSER_NAVIGATION_TIMEOUT_MS', 45000),
     'session_lease_seconds' => (int) env('SESSION_LEASE_SECONDS', 5400),
     'session_idle_timeout_seconds' => (int) env('SESSION_IDLE_TIMEOUT_SECONDS', 900),
     'session_disconnect_grace_seconds' => (int) env('SESSION_DISCONNECT_GRACE_SECONDS', 180),
