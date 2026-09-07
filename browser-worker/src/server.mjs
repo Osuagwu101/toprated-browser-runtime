@@ -17,8 +17,16 @@ const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
 const sessionAuthenticationPolicies = new Map();
-const workerControlRateLimiter = new FixedWindowRateLimiter({ limit: normalizeRateLimit(process.env.WORKER_CONTROL_RATE_LIMIT_PER_MINUTE, 'WORKER_CONTROL_RATE_LIMIT_PER_MINUTE', 600) });
-const viewerRateLimiter = new FixedWindowRateLimiter({ limit: normalizeRateLimit(process.env.VIEWER_RATE_LIMIT_PER_MINUTE, 'VIEWER_RATE_LIMIT_PER_MINUTE', 1200) });
+const workerControlRateLimiter = new FixedWindowRateLimiter({
+  limit: normalizeRateLimit(process.env.WORKER_CONTROL_RATE_LIMIT_PER_MINUTE, 'WORKER_CONTROL_RATE_LIMIT_PER_MINUTE', 600),
+  maxBuckets: 1024,
+});
+const viewerRateLimit = normalizeRateLimit(process.env.VIEWER_RATE_LIMIT_PER_MINUTE, 'VIEWER_RATE_LIMIT_PER_MINUTE', 1200);
+const viewerClientRateLimiter = new FixedWindowRateLimiter({
+  limit: Math.min(100000, viewerRateLimit * controller.maxSessions),
+  maxBuckets: 4096,
+});
+const viewerSessionRateLimiter = new FixedWindowRateLimiter({ limit: viewerRateLimit, maxBuckets: 4096 });
 
 let sessionCreatesInFlight = 0;
 let sessionCreatesSettled = Promise.resolve();
@@ -39,10 +47,16 @@ function endSessionCreate() {
   }
 }
 async function waitForSessionCreatesToSettle() {
-  while (sessionCreatesInFlight > 0) {
-    await sessionCreatesSettled;
+  while (sessionCreatesInFlight > 0) await sessionCreatesSettled;
+}
+function pruneSessionAuthenticationPolicies() {
+  const liveSessionIds = new Set(controller.listStatus().sessions.map((session) => session.sessionId));
+  for (const sessionId of sessionAuthenticationPolicies.keys()) {
+    if (!liveSessionIds.has(sessionId)) sessionAuthenticationPolicies.delete(sessionId);
   }
 }
+const policyPruneTimer = setInterval(pruneSessionAuthenticationPolicies, 60000);
+policyPruneTimer.unref();
 
 function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-age=0', pragma: 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...extra }; }
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
@@ -90,6 +104,7 @@ const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url || '/', 'http://browser-worker.local');
     if (request.method === 'GET' && requestUrl.pathname === '/health') return writeJson(response, 200, buildHealthPayload());
 
+    pruneSessionAuthenticationPolicies();
     const clientAddress = String(request.socket.remoteAddress || 'unknown');
     const viewerRoute = matchViewerRoute(requestUrl.pathname);
     if (requestUrl.pathname.startsWith('/browser/')) {
@@ -99,7 +114,8 @@ const server = http.createServer(async (request, response) => {
     }
     if (viewerRoute) {
       assertNoQuery(requestUrl);
-      enforceRateLimit(viewerRateLimiter, `${clientAddress}:${viewerRoute.sessionId}`);
+      enforceRateLimit(viewerClientRateLimiter, clientAddress);
+      enforceRateLimit(viewerSessionRateLimiter, `${clientAddress}:${viewerRoute.sessionId}`);
     }
 
     // Session-scoped lifecycle API used by Laravel. Sensitive browser state is accepted only on this private, authenticated creation path and is never logged or returned.
@@ -176,8 +192,8 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }, extraHeaders);
   }
 });
-server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' })));
+server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' }));
 let shuttingDown = false;
-async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await controller.stopAll(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
+async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
