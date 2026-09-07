@@ -520,3 +520,24 @@ Status: **OPEN / EXTERNALLY BLOCKED**.
 ## Phase 10 live-gate status
 
 Phase 10 is **IN TEST**. Deterministic CI is technically green, but no real third-party account has completed authenticated-state capture and fresh-browser reuse for the strengthened owner-required live criterion. Owner approval and Phase 11 remain blocked.
+
+
+### SB-010-008 — Live harness was limited to the container browser rejected by requested providers
+
+Severity: High / owner-required live exit-gate blocker.
+
+Underlying cause: the Phase 10 live harness inherited Phase 8's worker-browser bootstrap assumption. That was valid for Phrasly after the administrator completed its human-in-the-loop challenge, but ChatGPT and StealthWriter reject the containerized Chromium before an authenticated state can be created. The backend already supports bounded allowlisted state ingestion and fresh-browser verification; the missing boundary was a legitimate normal-desktop-browser bootstrap.
+
+Corrective action:
+
+- add `scripts/phase10-desktop-live-account-validation.ps1`, which launches a dedicated normal Google Chrome profile under the current Windows administrator;
+- keep all password, OTP and provider-verification input inside that normal browser;
+- capture cookies and Web Storage only for the selected profile's configured host allowlist over an ephemeral loopback-only Chrome DevTools channel;
+- store the captured state only in an ACL-restricted per-user temporary directory;
+- extend `scripts/phase10-live-account-validation.py` with an operator-only imported-state mode that validates size/type, consumes and deletes the file immediately, and runs the unchanged fresh-container authentication, viewer, reuse, residue and sensitive-log proof;
+- close the desktop Chrome tree and delete its dedicated profile/state on success or failure;
+- add PowerShell syntax validation and Phase 10 workflow presence assertions.
+
+This remediation does not automate, defeat or spoof the provider challenge. The administrator must complete the legitimate human verification in normal Chrome.
+
+Status: **FIXED IN CODE / AWAITING OWNER-OPERATED LIVE VERIFICATION**.

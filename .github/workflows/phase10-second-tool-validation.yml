@@ -104,6 +104,8 @@ jobs:
           test -f browser-worker/test/multi-auth-tool-fixture.mjs
           test -f tests/phase10-e2e.py
           test -f tests/phase10-multi-auth-e2e.py
+          test -f scripts/phase10-live-account-validation.py
+          test -f scripts/phase10-desktop-live-account-validation.ps1
           test -f docs/audits/phase-10.md
           test -f api/config/tool-profiles.phase10-ci.json
           grep -F 'TOOL_PROFILES_PATH' api/config/browser.php docker-compose.yml

@@ -16,8 +16,15 @@ done < <(find api -type f -name '*.php' -not -path '*/vendor/*' -print0 | sort -
 printf 'python_compile_check=begin\n'
 python3 -m py_compile tests/*.py scripts/*.py
 
-printf 'json_validation=begin\n'
-python3 -m json.tool api/composer.json >/dev/null
+printf 'powershell_syntax_check=begin\n'
+if command -v pwsh >/dev/null 2>&1; then
+  pwsh -NoProfile -NonInteractive -Command '$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("scripts/phase10-desktop-live-account-validation.ps1", [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }'
+  printf 'powershell_ok=%s\n' 'scripts/phase10-desktop-live-account-validation.ps1'
+else
+  printf 'powershell_check=skipped-pwsh-unavailable\n'
+fi
+
+printf 'json_validation=begin\n'python3 -m json.tool api/composer.json >/dev/null
 python3 -m json.tool api/config/tool-profiles.json >/dev/null
 python3 -m json.tool browser-worker/package.json >/dev/null
 

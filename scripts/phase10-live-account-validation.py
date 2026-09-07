@@ -28,6 +28,7 @@ OPERATOR_SECRET = os.environ.get("RUNTIME_OPERATOR_AUTH_SECRET", "")
 TOOL = os.environ.get("PHASE10_LIVE_TOOL", "chatgpt").strip().lower()
 LOGIN_TIMEOUT_SECONDS = int(os.environ.get("PHASE10_ADMIN_LOGIN_TIMEOUT_SECONDS", "1200"))
 READY_FILE_VALUE = os.environ.get("PHASE10_ADMIN_LOGIN_READY_FILE", "").strip()
+DESKTOP_STATE_FILE_VALUE = os.environ.get("PHASE10_DESKTOP_STATE_FILE", "").strip()
 
 TOOLS = {
     "chatgpt": {
@@ -233,61 +234,89 @@ LINK_FILE = Path(os.environ.get(
     f"/tmp/phase10-{TOOL}-admin-viewer.txt",
 ))
 READY_FILE = Path(READY_FILE_VALUE) if READY_FILE_VALUE else None
+DESKTOP_STATE_FILE = Path(DESKTOP_STATE_FILE_VALUE) if DESKTOP_STATE_FILE_VALUE else None
+
+
+def load_desktop_state(path):
+    if path is None or not path.is_file():
+        die("Desktop browser state file is missing.")
+    try:
+        if path.stat().st_size < 2 or path.stat().st_size > 1048576:
+            die("Desktop browser state file has an invalid size.")
+        with path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except SystemExit:
+        raise
+    except Exception:
+        die("Desktop browser state file is not valid JSON.")
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    if not isinstance(state, dict):
+        die("Desktop browser state must be a JSON object.")
+    return state
 
 
 def main():
     bootstrap_id = None
     proof_id = None
+    state = None
     try:
         progress("PREFLIGHT_RUNTIME")
         code, capacity = signed("GET", "/api/capacity", BOOTSTRAP_WRITER)
         if code != 200 or capacity.get("workerHealthy") is not True:
             die("Standalone runtime preflight failed.")
 
-        progress("RESTORE_OPERATOR_BOUNDARY")
-        operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
-        progress("START_ADMIN_BROWSER")
-        code, bootstrap = signed("POST", "/api/sessions", BOOTSTRAP_WRITER, {
-            "writer_id": BOOTSTRAP_WRITER,
-            "tool_slug": TOOLS[TOOL]["bootstrap"],
-        })
-        if code not in (200, 201) or bootstrap.get("status") != "active":
-            die(f"Administrator browser could not start ({bootstrap.get('code', 'UNKNOWN')}).")
-        bootstrap_id = bootstrap.get("sessionId")
-        viewer_link, _token, grant, _viewer_url = decode_grant(bootstrap.get("viewerGrant"))
-        worker_session_id = grant.get("sid")
-        if not isinstance(worker_session_id, str) or not worker_session_id:
-            die("Administrator browser identity is missing.")
+        if DESKTOP_STATE_FILE is not None:
+            progress("IMPORT_DESKTOP_AUTHORIZED_STATE")
+            state = load_desktop_state(DESKTOP_STATE_FILE)
+        else:
+            progress("RESTORE_OPERATOR_BOUNDARY")
+            operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
+            progress("START_ADMIN_BROWSER")
+            code, bootstrap = signed("POST", "/api/sessions", BOOTSTRAP_WRITER, {
+                "writer_id": BOOTSTRAP_WRITER,
+                "tool_slug": TOOLS[TOOL]["bootstrap"],
+            })
+            if code not in (200, 201) or bootstrap.get("status") != "active":
+                die(f"Administrator browser could not start ({bootstrap.get('code', 'UNKNOWN')}).")
+            bootstrap_id = bootstrap.get("sessionId")
+            viewer_link, _token, grant, _viewer_url = decode_grant(bootstrap.get("viewerGrant"))
+            worker_session_id = grant.get("sid")
+            if not isinstance(worker_session_id, str) or not worker_session_id:
+                die("Administrator browser identity is missing.")
 
-        secure_write(LINK_FILE, viewer_link + "\n")
-        viewer_opened = False
-        if os.name == "nt":
-            try:
-                os.startfile(viewer_link)
-                viewer_opened = True
-            except OSError:
-                viewer_opened = False
-        grantExpiresAt = int(grant.get("exp", 0))
-        safeLoginSeconds = grantExpiresAt - int(time.time()) - 30
-        if safeLoginSeconds < 60:
-            die("Administrator viewer grant lifetime is too short for safe login.")
-        wait_for_admin(
-            READY_FILE,
-            viewer_opened,
-            min(LOGIN_TIMEOUT_SECONDS, safeLoginSeconds),
-        )
+            secure_write(LINK_FILE, viewer_link + "\n")
+            viewer_opened = False
+            if os.name == "nt":
+                try:
+                    os.startfile(viewer_link)
+                    viewer_opened = True
+                except OSError:
+                    viewer_opened = False
+            grantExpiresAt = int(grant.get("exp", 0))
+            safeLoginSeconds = grantExpiresAt - int(time.time()) - 30
+            if safeLoginSeconds < 60:
+                die("Administrator viewer grant lifetime is too short for safe login.")
+            wait_for_admin(
+                READY_FILE,
+                viewer_opened,
+                min(LOGIN_TIMEOUT_SECONDS, safeLoginSeconds),
+            )
 
-        progress("CAPTURE_AUTHORIZED_STATE")
-        code, state = worker_json(
-            "GET",
-            f"/browser/sessions/{parse.quote(worker_session_id)}/authorized-state",
-        )
-        if code != 200 or not isinstance(state, dict):
-            die("Private worker could not capture the authenticated browser state.")
+            progress("CAPTURE_AUTHORIZED_STATE")
+            code, state = worker_json(
+                "GET",
+                f"/browser/sessions/{parse.quote(worker_session_id)}/authorized-state",
+            )
+            if code != 200 or not isinstance(state, dict):
+                die("Private worker could not capture the authenticated browser state.")
 
-        close_session(bootstrap_id, BOOTSTRAP_WRITER)
-        bootstrap_id = None
-        LINK_FILE.unlink(missing_ok=True)
+            close_session(bootstrap_id, BOOTSTRAP_WRITER)
+            bootstrap_id = None
+            LINK_FILE.unlink(missing_ok=True)
 
         progress("START_FRESH_PROOF_BROWSER")
         code, restored = operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
@@ -351,6 +380,8 @@ def main():
         LINK_FILE.unlink(missing_ok=True)
         if READY_FILE is not None:
             READY_FILE.unlink(missing_ok=True)
+        if DESKTOP_STATE_FILE is not None:
+            DESKTOP_STATE_FILE.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

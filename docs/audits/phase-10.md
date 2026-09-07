@@ -240,9 +240,14 @@ No challenge bypass, fingerprint spoofing, cookie extraction from an unrelated b
 - authenticated live state capture and fresh-browser reuse for ChatGPT — **NOT VERIFIED / EXTERNALLY BLOCKED**;
 - authenticated live state capture and fresh-browser reuse for StealthWriter — **NOT VERIFIED / EXTERNALLY BLOCKED**.
 
-Phase 10 remains **IN TEST** until either:
+### Desktop administrator bootstrap remediation
 
-1. a different legitimate third-party account tool completes the same generic live capture/reuse gate; or
-2. the owner explicitly accepts a documented deterministic-only exception.
+The live harness now has a generic Windows desktop-bootstrap companion for providers that reject containerized Chromium. It launches a dedicated normal Google Chrome profile on the administrator's desktop without an automation extension, permits the administrator to complete the legitimate provider login/challenge directly, and captures only cookies and Web Storage whose hosts match the configured tool allowlist. It never accepts account credentials or OTP values.
 
-**STATUS: IN TEST — EXTERNAL PROVIDER BLOCKER OPEN**
+The captured state is written only to a per-user ACL-restricted temporary directory, is consumed and deleted immediately by the existing operator harness, and is then tested in a fresh self-hosted Chromium through the unchanged backend authentication, viewer, ownership, reuse and cleanup gates. The dedicated Chrome process/profile and any residual temporary state are removed on completion or failure. Raw state and runtime secrets are not printed.
+
+This is a human-in-the-loop session bootstrap, not challenge automation or circumvention. It preserves the provider's requirement that the administrator personally completes verification.
+
+Phase 10 remains **IN TEST** until this desktop bootstrap produces a successful fresh-container authenticated-state and reuse proof for at least one requested real provider. A deterministic-only exception is no longer the primary remediation path.
+
+**STATUS: IN TEST — DESKTOP LIVE PROOF REQUIRED**
