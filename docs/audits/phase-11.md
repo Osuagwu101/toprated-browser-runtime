@@ -110,6 +110,8 @@ RED history:
 
 - Phase 11 run `34083042244` on `933cc5a4588b888b9754550157c6d69d4b7e684b`: the runtime correctly returned HTTP 429 / `RATE_LIMITED`, but the Python harness read `Retry-After` with a case-sensitive dictionary key and raised `KeyError`. This was a test-harness defect, not a failed limiter. Corrective action: use case-insensitive HTTP header lookup and retain the `Retry-After >= 1` assertion.
 
+- Phase 11 run `34083201724` on `f46b08ce49301f28a4d90bcc80a8430e6c392812`: the API limiter returned the correct 429 / `RATE_LIMITED` but serialized fractional remaining seconds as `Retry-After: 55.98489`. Corrective action: ceiling the remaining fixed-window duration to a positive integer, as required by HTTP retry semantics; the strict integer assertion remains.
+
 Authoritative exact-head GitHub Actions evidence: **PENDING**.
 
 Inherited Phase 1–10 exact-head workflows: **PENDING**.

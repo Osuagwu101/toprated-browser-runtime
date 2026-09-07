@@ -622,3 +622,16 @@ Underlying cause: the worker correctly returned HTTP 429, `RATE_LIMITED`, and `R
 Corrective action: resolve response headers case-insensitively while retaining the required positive `Retry-After` assertion.
 
 Status: **FIXED IN HARNESS / RE-VERIFICATION PENDING**.
+
+
+### SB-011-005 — API rate limiter emitted fractional Retry-After seconds
+
+Severity: Medium / protocol-compliance test blocker.
+
+RED evidence: Phase 11 run `34083201724` on `f46b08ce49301f28a4d90bcc80a8430e6c392812`.
+
+Underlying cause: Carbon returned a fractional elapsed duration and the API serialized the remaining window directly, producing `Retry-After: 55.98489`.
+
+Corrective action: ceiling the remaining duration and cast it to a positive integer before writing the header. The E2E keeps its strict integer and `>= 1` checks.
+
+Status: **FIXED IN CODE / RE-VERIFICATION PENDING**.

@@ -50,7 +50,7 @@ final class RuntimeRequestRateLimiter
             return [
                 'allowed' => $hits <= $limit,
                 'remaining' => max(0, $limit - $hits),
-                'retryAfter' => max(1, $windowSeconds - $elapsed),
+                'retryAfter' => max(1, (int) ceil($windowSeconds - $elapsed)),
             ];
         }, 3);
     }
