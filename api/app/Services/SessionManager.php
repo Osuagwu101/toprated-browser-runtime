@@ -28,7 +28,6 @@ final class SessionManager
         array $authentication = [],
     ): array {
         return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication): array {
-            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication);
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -39,11 +38,13 @@ final class SessionManager
                 ->latest('created_at')
                 ->first();
 
-            if ($existing !== null) {
-                if ($existing->tool_slug !== $toolSlug) {
-                    throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
-                }
+            if ($existing !== null && $existing->tool_slug !== $toolSlug) {
+                throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
+            }
 
+            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication);
+
+            if ($existing !== null) {
                 $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions, $authentication): ?array {
                     $fresh = BrowserSession::query()->find($existing->id);
                     if ($fresh === null || ! in_array($fresh->status, self::OPEN_STATUSES, true)) {
@@ -232,7 +233,7 @@ final class SessionManager
 
             return [
                 'sessionId' => $session->id,
-                'viewerGrant' => $this->viewerGrants->issue($session->worker_session_id, $writerId),
+                'viewerGrant' => $this->issueViewerGrant($session),
             ];
         });
     }
@@ -470,7 +471,7 @@ final class SessionManager
     {
         $viewerGrant = null;
         if ($includeViewerGrant && $session->status === 'active' && $session->worker_session_id !== null) {
-            $viewerGrant = $this->viewerGrants->issue($session->worker_session_id, $session->writer_id);
+            $viewerGrant = $this->issueViewerGrant($session);
         }
 
         return [
@@ -488,6 +489,19 @@ final class SessionManager
             'failureCode' => $session->failure_code,
             'viewerGrant' => $viewerGrant,
         ];
+    }
+
+    private function issueViewerGrant(BrowserSession $session): array
+    {
+        if ($session->worker_session_id === null) {
+            throw new RuntimeApiException('SESSION_NOT_VIEWABLE', 409, 'The browser session is not ready for viewing.');
+        }
+
+        $ttl = str_ends_with($session->tool_slug, '-admin-bootstrap')
+            ? (int) config('browser.admin_viewer_token_ttl_seconds', 900)
+            : null;
+
+        return $this->viewerGrants->issue($session->worker_session_id, $session->writer_id, $ttl);
     }
 
     private function owned(string $sessionId, string $writerId): BrowserSession

@@ -10,6 +10,9 @@ final class BrowserWorkerClient
 {
     private const READ_CONNECTION_ATTEMPTS = 4;
     private const READ_CONNECTION_RETRY_DELAY_MICROSECONDS = 100000;
+    private const DEFAULT_REQUEST_TIMEOUT_SECONDS = 15;
+    private const START_REQUEST_OVERHEAD_SECONDS = 15;
+    private const MAX_START_REQUEST_TIMEOUT_SECONDS = 180;
 
     private function url(string $path): string
     {
@@ -46,7 +49,21 @@ final class BrowserWorkerClient
             $payload['browserState'] = $browserState;
         }
 
-        return $this->request('POST', '/browser/sessions', $payload);
+        $authenticationTimeout = (int) ($authentication['timeoutSeconds'] ?? 0);
+        $navigationTimeoutMs = (int) config('browser.navigation_timeout_ms', 45000);
+        if ($navigationTimeoutMs < 5000 || $navigationTimeoutMs > 120000) {
+            throw new RuntimeApiException('BROWSER_NAVIGATION_CONFIG_INVALID', 503, 'Browser navigation timeout configuration is invalid.');
+        }
+        $navigationTimeout = (int) ceil($navigationTimeoutMs / 1000);
+        $requestTimeout = min(
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+            max(
+                self::DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                $navigationTimeout + $authenticationTimeout + self::START_REQUEST_OVERHEAD_SECONDS,
+            ),
+        );
+
+        return $this->request('POST', '/browser/sessions', $payload, true, false, $requestTimeout);
     }
 
     public function stop(string $workerSessionId): array
@@ -60,12 +77,13 @@ final class BrowserWorkerClient
         ?array $payload = null,
         bool $authenticateControl = true,
         bool $retryConnection = false,
+        int $timeoutSeconds = self::DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ): array {
         $attempts = $retryConnection ? self::READ_CONNECTION_ATTEMPTS : 1;
         $response = null;
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-            $pending = Http::acceptJson()->timeout(15);
+            $pending = Http::acceptJson()->timeout($timeoutSeconds);
             if ($authenticateControl) {
                 $secret = (string) config('browser.worker_control_secret', '');
                 if (strlen($secret) < 32) {
@@ -99,6 +117,10 @@ final class BrowserWorkerClient
             }
             if ($workerCode === 'AUTHENTICATION_NOT_VERIFIED') {
                 throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
+            }
+            if (in_array($workerCode, ['BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT'], true)) {
+                $status = $workerCode === 'BROWSER_NAVIGATION_TIMEOUT' ? 504 : 502;
+                throw new RuntimeApiException($workerCode, $status, 'The browser worker could not reach an interactive tool page.');
             }
 
             [$code, $status] = match ($response->status()) {

@@ -25,12 +25,15 @@ final class ViewerGrantService
         }
     }
 
-    public function issue(string $workerSessionId, string $writerId): array
+    public function issue(string $workerSessionId, string $writerId, ?int $ttlSeconds = null): array
     {
         $this->assertConfigured();
 
         $secret = (string) config('browser.viewer_signing_secret');
-        $ttl = (int) config('browser.viewer_token_ttl_seconds', 300);
+        $ttl = $ttlSeconds ?? (int) config('browser.viewer_token_ttl_seconds', 300);
+        if ($ttl < 1 || $ttl > 900) {
+            throw new RuntimeApiException('VIEWER_TTL_INVALID', 503, 'Viewer token lifetime is invalid.');
+        }
         $baseUrl = rtrim((string) config('browser.viewer_public_base_url'), '/');
         $now = time();
         $payload = [

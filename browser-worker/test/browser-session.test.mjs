@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BrowserSessionController, RUNTIME_PHASE, validateNavigationUrl, validateViewerInput } from '../src/browser-session.mjs';
+import { BrowserSessionController, RUNTIME_PHASE, normalizeBrowserDisplayMode, normalizeBrowserNavigationTimeoutMs, validateNavigationUrl, validateViewerInput } from '../src/browser-session.mjs';
 
 test('accepts deterministic HTML data pages and normal web URLs', () => {
   assert.equal(validateNavigationUrl('https://example.com/'), 'https://example.com/');
@@ -30,6 +30,19 @@ test('accepts bounded text and keyboard input and rejects unsupported input type
   });
   assert.throws(() => validateViewerInput({ type: 'shell', command: 'id' }), /must be mouse, scroll, text, or key/);
   assert.throws(() => validateViewerInput({ type: 'text', text: 'x'.repeat(2001) }), /between 1 and 2000/);
+});
+
+test('accepts only the supported generic browser display modes', () => {
+  assert.equal(normalizeBrowserDisplayMode(undefined), 'headless');
+  assert.equal(normalizeBrowserDisplayMode('virtual-display'), 'virtual-display');
+  assert.throws(() => normalizeBrowserDisplayMode('stealth'), /headless or virtual-display/);
+});
+
+test('bounds the generic browser navigation readiness timeout', () => {
+  assert.equal(normalizeBrowserNavigationTimeoutMs(undefined), 45000);
+  assert.equal(normalizeBrowserNavigationTimeoutMs('60000'), 60000);
+  assert.throws(() => normalizeBrowserNavigationTimeoutMs('4999'), /between 5000 and 120000/);
+  assert.throws(() => normalizeBrowserNavigationTimeoutMs('120001'), /between 5000 and 120000/);
 });
 
 test('Phase 6 retains configurable capacity bounded to the blueprint target', () => {

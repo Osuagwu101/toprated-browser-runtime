@@ -237,7 +237,7 @@ final class AuthorizedBrowserState
 
     private function normalizeStorageMap(mixed $input): array
     {
-        if ($input === null) {
+        if ($input === null || $input === []) {
             return [];
         }
         if (! is_array($input) || array_is_list($input)) {

@@ -492,11 +492,11 @@ Exact verification SHA `362e650b71bbf85c2a592431a3099989d0b76910` passed all aut
 - Phase 9 `34049104660`;
 - Phase 10 `34049104639`.
 
-Phase 10 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. It is not merged or COMPLETE, and Phase 11 has not started.
+Phase 10 is **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**. The owner approved the phase on 2026-09-07; merge and exact-main-head validation remain before final COMPLETE status. Phase 11 has not started.
 
-### SB-010-007 — Requested live providers reject the self-hosted browser at their security-verification boundary
+### SB-010-007 — Requested live validation providers rejected the managed browser at their security-verification boundary
 
-Severity: High / owner-required live exit-gate blocker.
+Severity: Observation / non-blocking validation-target incompatibility.
 
 Observed on 2026-09-07 at exact runtime head `3de398c3538509a1bee75dea8909dfd9f6a52160`:
 
@@ -511,33 +511,45 @@ Audit history preceding the final provider result:
 - `WORKER_ERROR` startup failures led to readiness-based navigation, safe stage logging and aligned navigation/request/startup timeouts;
 - the initial 300-second administrator viewer grant expired during manual login and led to the bounded 900-second administrator-bootstrap grant while ordinary writer grants remained 300 seconds.
 
-Exact-head deterministic evidence after those corrections: Phase 1–3 `34075450744`, Phase 4 `34075450739`, Phase 5 `34075450741`, Phase 6 `34075450753`, Phase 7 `34075450869`, Phase 8 `34075450748`, Phase 9 `34075450751`, and Phase 10 `34075450745` — all SUCCESS.
+Owner clarification: ChatGPT and StealthWriter were disposable validation probes for multi-tool generality, not planned production tools and not writer requirements. Their refusal of a managed browser therefore does not block the Phase 10 architecture gate. No security challenge was bypassed, spoofed or weakened.
 
-Disposition: the runtime reaches both real providers and the generic deterministic state machinery remains green, but the owner-required live authenticated-state capture/reuse criterion is not met. Provider challenges will not be bypassed, spoofed or weakened. Repeated retries are stopped.
+Status: **CLOSED AS NON-BLOCKING VALIDATION-TARGET INCOMPATIBILITY / HISTORY PRESERVED**.
 
-Status: **OPEN / EXTERNALLY BLOCKED**.
+### SB-010-008 — Experimental Windows debug-profile bootstrap did not reproduce the owner's established browser trust
 
-## Phase 10 live-gate status
+Severity: Major / failed experimental remediation.
 
-Phase 10 is **IN TEST**. Deterministic CI is technically green, but no real third-party account has completed authenticated-state capture and fresh-browser reuse for the strengthened owner-required live criterion. Owner approval and Phase 11 remain blocked.
+Underlying cause: the helper launched a new Chrome profile with remote debugging enabled. Although it was a desktop Chrome process, it did not inherit the established everyday profile that had already passed provider verification, and the requested validation provider still rejected it. Exporting authentication from an unrelated everyday profile would also contradict the intended managed-profile boundary.
 
+Observed owner-operated result: the helper and subsequent live harness returned `WORKER_ERROR`, `TOOL_REAUTH_REQUIRED` and an expired viewer without producing a valid fresh-browser proof.
 
-### SB-010-008 — Live harness was limited to the container browser rejected by requested providers
+Corrective action on `600bdd51d32e527b157d929868ab82b1df1033ab`:
 
-Severity: High / owner-required live exit-gate blocker.
+- remove `scripts/phase10-desktop-live-account-validation.ps1`;
+- remove imported desktop-state mode from `scripts/phase10-live-account-validation.py`;
+- remove the helper-specific PowerShell gate;
+- retain the supported administrator-operated protected-viewer flow and all failure evidence.
 
-Underlying cause: the Phase 10 live harness inherited Phase 8's worker-browser bootstrap assumption. That was valid for Phrasly after the administrator completed its human-in-the-loop challenge, but ChatGPT and StealthWriter reject the containerized Chromium before an authenticated state can be created. The backend already supports bounded allowlisted state ingestion and fresh-browser verification; the missing boundary was a legitimate normal-desktop-browser bootstrap.
+Status: **CLOSED / EXPERIMENT REVERTED AFTER LIVE FAILURE**.
+
+### SB-010-009 — Named validation profiles did not independently prove arbitrary-slug portability and simultaneous multi-tool use
+
+Severity: Blocker / Phase 10 general-purpose evidence.
+
+Underlying cause: the previous deterministic suite exercised generic runtime code, but the deepest authenticated-state matrix was invoked only with the named `stealthwriter` and `chatgpt` profile slugs and mainly in sequence. That left avoidable doubt about hidden name coupling and concurrent independent-tool behavior.
 
 Corrective action:
 
-- add `scripts/phase10-desktop-live-account-validation.ps1`, which launches a dedicated normal Google Chrome profile under the current Windows administrator;
-- keep all password, OTP and provider-verification input inside that normal browser;
-- capture cookies and Web Storage only for the selected profile's configured host allowlist over an ephemeral loopback-only Chrome DevTools channel;
-- store the captured state only in an ACL-restricted per-user temporary directory;
-- extend `scripts/phase10-live-account-validation.py` with an operator-only imported-state mode that validates size/type, consumes and deletes the file immediately, and runs the unchanged fresh-container authentication, viewer, reuse, residue and sensitive-log proof;
-- close the desktop Chrome tree and delete its dedicated profile/state on success or failure;
-- add PowerShell syntax validation and Phase 10 workflow presence assertions.
+- parameterize the full multi-auth E2E with environment-selected URL-auth and selector-auth tool slugs;
+- create two CI-only cloned profiles with unpredictable non-vendor names;
+- run the identical suite against both the named validation profiles and arbitrary clones;
+- hold two different writer/tool sessions open simultaneously, prove distinct API and worker browser identities, confirm capacity reports exactly two active/open sessions, then close both and verify zero residue;
+- preserve credential rejection, host policy, independent auth latches, reuse, cross-tool ownership rejection, live-auth-loss cleanup, operator recovery and sensitive-output checks in both runs.
 
-This remediation does not automate, defeat or spoof the provider challenge. The administrator must complete the legitimate human verification in normal Chrome.
+Verified evidence: exact head `600bdd51d32e527b157d929868ab82b1df1033ab` passed Phase 10 run `34080015103`; inherited Phase 1–9 workflows `34080015083`, `34080015146`, `34080015187`, `34080015125`, `34080015117`, `34080015211` and `34080015110` all succeeded on the same head.
 
-Status: **FIXED IN CODE / AWAITING OWNER-OPERATED LIVE VERIFICATION**.
+Status: **FIXED / VERIFIED**.
+
+## Phase 10 gate status
+
+Phase 10 is **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**. The owner explicitly approved the verified technical gate in the project conversation after reviewing the meaning of configuration-driven tool profiles. The provider is demonstrably profile-driven and general-purpose rather than Phrasly-only. The production Browser Use path remains outside this standalone branch and Phase 11 has not started.

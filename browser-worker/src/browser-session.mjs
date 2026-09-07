@@ -3,13 +3,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
+import { filterAuthorizedCookies, installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
 
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
 export const VIEWPORT_HEIGHT = 900;
 export const MAX_SUPPORTED_BROWSER_SESSIONS = 15;
 export const RUNTIME_PHASE = 6;
+
+export function normalizeBrowserDisplayMode(value) {
+  const mode = String(value || 'headless').trim().toLowerCase();
+  if (!['headless', 'virtual-display'].includes(mode)) {
+    throw new Error('BROWSER_DISPLAY_MODE must be headless or virtual-display.');
+  }
+  return mode;
+}
+
+export function normalizeBrowserNavigationTimeoutMs(value) {
+  const timeout = Number(value || 45000);
+  if (!Number.isInteger(timeout) || timeout < 5000 || timeout > 120000) {
+    throw new Error('BROWSER_NAVIGATION_TIMEOUT_MS must be an integer between 5000 and 120000.');
+  }
+  return timeout;
+}
 
 export function validateNavigationUrl(value) {
   const raw = String(value || DEFAULT_TEST_URL).trim();
@@ -108,10 +124,13 @@ function killProcessGroup(groupId, signal) { try { process.kill(-groupId, signal
 async function waitForExit(processRef, timeoutMs) { if (processRef.exitCode !== null || processRef.signalCode !== null) return true; return new Promise((resolve) => { const timer = setTimeout(() => resolve(false), timeoutMs); processRef.once('exit', () => { clearTimeout(timer); resolve(true); }); }); }
 
 export class BrowserSessionController {
-  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3) } = {}) {
+  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SUPPORTED_BROWSER_SESSIONS) throw new Error(`MAX_BROWSER_SESSIONS must be an integer between 1 and ${MAX_SUPPORTED_BROWSER_SESSIONS}.`);
     this.executablePath = executablePath;
     this.maxSessions = maxSessions;
+    this.displayMode = normalizeBrowserDisplayMode(displayMode);
+    this.xvfbRunPath = xvfbRunPath;
+    this.navigationTimeoutMs = normalizeBrowserNavigationTimeoutMs(navigationTimeoutMs);
     this.sessions = new Map();
     this.startingCount = 0;
   }
@@ -138,6 +157,7 @@ export class BrowserSessionController {
       title: session.title,
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       viewer: 'restricted',
+      displayMode: this.displayMode,
       authentication: { required: session.authenticationRequired === true, verified: session.authenticationVerified === true },
     };
   }
@@ -161,15 +181,24 @@ export class BrowserSessionController {
     this.pruneExited();
     if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
     if (!existsSync(this.executablePath)) throw new Error(`Chromium executable not found: ${this.executablePath}`);
+    if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
     const userDataDir = mkdtempSync(join(tmpdir(), 'toprated-browser-'));
-    const browserProcess = spawn(this.executablePath, ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    const chromiumArgs = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'];
+    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
+    const launcherArgs = this.displayMode === 'virtual-display'
+      ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
+      : ['--headless=new', ...chromiumArgs];
+    const browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
+    let failureStage = 'cdp-port';
     try {
       const port = await waitForDevToolsPort(userDataDir, browserProcess);
+      failureStage = 'cdp-target';
       const target = await findPageTarget(port);
+      failureStage = 'cdp-connect';
       const cdp = new CdpClient(target.webSocketDebuggerUrl);
       await cdp.connect(); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
       await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT, deviceScaleFactor: 1, mobile: false });
@@ -184,15 +213,20 @@ export class BrowserSessionController {
         title: '',
         authenticationRequired: options?.authentication?.required === true,
         authenticationVerified: false,
+        authorizedStateAllowedHosts: [],
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
 
+      failureStage = 'state-install';
       const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
+      this.assertSession(sessionId).authorizedStateAllowedHosts = bootstrap.allowedHosts;
       try {
+        failureStage = 'navigation';
         await this.navigate(sessionId, safeUrl);
       } finally {
         await removeBrowserStateBootstrap(cdp, bootstrap.scriptIdentifier);
       }
+      failureStage = 'authentication';
       const authentication = await verifyAuthentication(cdp, options?.authentication || {});
       const session = this.assertSession(sessionId);
       session.authenticationRequired = authentication.required === true;
@@ -204,7 +238,9 @@ export class BrowserSessionController {
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
-      if (error?.code) wrapped.code = error.code;
+      const safeCode = error?.code || (failureStage === 'navigation' ? 'BROWSER_NAVIGATION_FAILED' : 'BROWSER_LAUNCH_FAILED');
+      wrapped.code = safeCode;
+      console.error(JSON.stringify({ event: 'browser_start_failed', stage: failureStage, code: safeCode }));
       throw wrapped;
     } finally { this.startingCount -= 1; }
   }
@@ -215,7 +251,33 @@ export class BrowserSessionController {
     const value = evaluation.result?.value || {}; session.url = String(value.url || session.url || 'about:blank'); session.title = String(value.title || '');
     return { ...this.present(session), readyState: String(value.readyState || '') };
   }
-  async navigate(sessionId, url) { const session = this.assertSession(sessionId); const safeUrl = validateNavigationUrl(url); const loadEvent = session.cdp.waitForEvent('Page.loadEventFired', 10000); const result = await session.cdp.send('Page.navigate', { url: safeUrl }, 10000); if (result.errorText) throw new Error(`Chromium navigation failed: ${result.errorText}`); await loadEvent; return { ...(await this.refreshMetadata(sessionId)), control: 'cdp' }; }
+  async navigate(sessionId, url) {
+    const session = this.assertSession(sessionId);
+    const safeUrl = validateNavigationUrl(url);
+    try {
+      const result = await session.cdp.send('Page.navigate', { url: safeUrl }, 10000);
+      if (result.errorText) {
+        throw Object.assign(new Error('Chromium rejected the navigation request.'), { statusCode: 502, code: 'BROWSER_NAVIGATION_FAILED' });
+      }
+
+      const deadline = Date.now() + this.navigationTimeoutMs;
+      while (Date.now() <= deadline) {
+        const ready = await session.cdp.send('Runtime.evaluate', {
+          expression: 'String(document.readyState || "")',
+          returnByValue: true,
+        }, 5000);
+        const state = String(ready?.result?.value || '');
+        if (state === 'interactive' || state === 'complete') {
+          return { ...(await this.refreshMetadata(sessionId)), control: 'cdp' };
+        }
+        await sleep(250);
+      }
+      throw Object.assign(new Error('Chromium navigation did not become interactive in time.'), { statusCode: 504, code: 'BROWSER_NAVIGATION_TIMEOUT' });
+    } catch (error) {
+      if (error?.code) throw error;
+      throw Object.assign(new Error('Chromium navigation failed.'), { statusCode: 502, code: 'BROWSER_NAVIGATION_FAILED' });
+    }
+  }
   async navigateOnly(url) { return this.navigate(this.onlySessionId(), url); }
   async captureFrame(sessionId) { const session = this.assertSession(sessionId); const result = await session.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, fromSurface: true, captureBeyondViewport: false }, 10000); if (!result.data) throw new Error('Chromium did not return a viewer frame.'); return Buffer.from(result.data, 'base64'); }
   async sendViewerInput(sessionId, input) {
@@ -256,10 +318,11 @@ export class BrowserSessionController {
     let currentHost = '';
     try { currentHost = new URL(String(storage.url || session.url || '')).hostname.toLowerCase().replace(/^\.+|\.+$/g, ''); } catch {}
     if (!currentHost) throw Object.assign(new Error('Browser is not on an exportable HTTP(S) tool origin.'), { statusCode: 409 });
-    const scopedCookies = cookies.filter((cookie) => {
-      const domain = String(cookie.domain || currentHost).toLowerCase().replace(/^\.+|\.+$/g, '');
-      return domain === currentHost || currentHost.endsWith(`.${domain}`) || domain.endsWith(`.${currentHost}`);
-    });
+    const scopedCookies = filterAuthorizedCookies(
+      cookies,
+      session.authorizedStateAllowedHosts,
+      currentHost,
+    );
     return {
       authenticated_cookies: scopedCookies,
       session_tokens: {
