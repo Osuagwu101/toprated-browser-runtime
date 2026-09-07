@@ -609,3 +609,16 @@ Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
 Implementation branch: `phase11-security-hardening`. Baseline: `0ed34da59138be76c5130e713dfccf932f30ee90`.
 
 The dedicated adversarial workflow and all inherited Phase 1–10 workflows must pass on one exact documented branch head. Phase 11 remains **NOT COMPLETE / OWNER APPROVAL NOT YET REQUESTED**.
+
+
+### SB-011-004 — Phase 11 harness treated HTTP header names as case-sensitive
+
+Severity: Test blocker / no runtime defect.
+
+RED evidence: Phase 11 run `34083042244` on `933cc5a4588b888b9754550157c6d69d4b7e684b`.
+
+Underlying cause: the worker correctly returned HTTP 429, `RATE_LIMITED`, and `Retry-After`, but Python's response-header mapping normalized the header spelling and the harness used an exact-case dictionary key.
+
+Corrective action: resolve response headers case-insensitively while retaining the required positive `Retry-After` assertion.
+
+Status: **FIXED IN HARNESS / RE-VERIFICATION PENDING**.

@@ -85,6 +85,14 @@ def grant_parts(grant):
     return parse.urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, '')), parse.unquote(parts.fragment)
 
 
+def header_value(headers, name):
+    wanted = name.lower()
+    for key, value in headers.items():
+        if key.lower() == wanted:
+            return value
+    raise KeyError(name)
+
+
 def assert_error(result, status, code):
     actual, headers, payload = result
     assert actual == status, (actual, status, payload)
@@ -103,6 +111,7 @@ assert_error(operator('GET', f'/api/operator/tool-auth/{TOOL}', secret=None), 40
 
 # Protected request parsing is deterministic and never falls through to HTML.
 assert_error(service('GET', '/api/capacity?debug=1'), 400, 'REQUEST_QUERY_FORBIDDEN')
+assert_error(service('GET', '/api/capacity', raw=b'{"unexpected":true}', content_type='application/json'), 400, 'REQUEST_BODY_FORBIDDEN')
 assert_error(service('POST', '/api/sessions', raw=b'{', content_type='application/json'), 400, 'MALFORMED_JSON')
 assert_error(service('POST', '/api/sessions', raw=b'{' + b'"padding":"' + (b'x' * 327681) + b'"}', content_type='application/json'), 413, 'REQUEST_TOO_LARGE')
 assert_error(service('POST', '/api/sessions', raw=b'[]', content_type='application/json'), 400, 'MALFORMED_REQUEST')
@@ -182,7 +191,7 @@ for _ in range(40):
         viewer_limited = result
         break
 assert viewer_limited is not None, 'viewer rate limit did not engage'
-assert viewer_limited[2]['code'] == 'RATE_LIMITED' and int(viewer_limited[1]['Retry-After']) >= 1, viewer_limited
+assert viewer_limited[2]['code'] == 'RATE_LIMITED' and int(header_value(viewer_limited[1], 'Retry-After')) >= 1, viewer_limited
 
 # Both sessions close through their owning identities and leave no worker state.
 assert service('DELETE', f'/api/sessions/{session_a}', writer='phase11-writer-a')[0] == 200
@@ -203,7 +212,7 @@ for caller, expected_code in [
             limited = result
             break
     assert limited is not None and limited[2].get('code') == expected_code, limited
-    assert int(limited[1]['Retry-After']) >= 1, limited
+    assert int(header_value(limited[1], 'Retry-After')) >= 1, limited
 
 print(json.dumps({
     'result': 'PASS',

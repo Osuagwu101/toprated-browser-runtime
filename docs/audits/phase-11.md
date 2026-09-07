@@ -106,6 +106,10 @@ Local pre-commit checks:
 - Phase 11 workflow YAML parse: PASS.
 - PHP lint was unavailable in the orchestration environment and is therefore not claimed; repository CI performs the authoritative PHP syntax/type gate in the API container/toolchain.
 
+RED history:
+
+- Phase 11 run `34083042244` on `933cc5a4588b888b9754550157c6d69d4b7e684b`: the runtime correctly returned HTTP 429 / `RATE_LIMITED`, but the Python harness read `Retry-After` with a case-sensitive dictionary key and raised `KeyError`. This was a test-harness defect, not a failed limiter. Corrective action: use case-insensitive HTTP header lookup and retain the `Retry-After >= 1` assertion.
+
 Authoritative exact-head GitHub Actions evidence: **PENDING**.
 
 Inherited Phase 1–10 exact-head workflows: **PENDING**.
