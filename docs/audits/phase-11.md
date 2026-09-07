@@ -128,6 +128,18 @@ Corrective process:
 
 Status: **IMPLEMENTED, VERIFICATION REQUIRED**.
 
+### Finding 4 — repaired worker entrypoint did not parse
+
+Severity: **HIGH / GATE BLOCKER**.
+
+Observed on repair head `ab85a27b0cb86010400a19254638c20a7897cdb9`: `node --check browser-worker/src/server.mjs` failed with `SyntaxError: missing ) after argument list` at the `server.listen(...)` startup statement. The dedicated workflow never exposed this result because GitHub failed the job before runner assignment.
+
+Underlying cause: the earlier server-start log hardening edit removed one closing parenthesis. The unit suite did not import the side-effectful server entrypoint, so its 24 passing tests did not cover entrypoint parsing; the repository-wide syntax gate would have caught the defect if a runner had executed it.
+
+Corrective action: commit `0ab0edf3527eaf5588dce6e94d3d7cb0a4ceeec7` restored the missing parenthesis without changing runtime behavior or weakening any test. Independent local evidence on the exact source: worker entrypoint syntax PASS; 24/24 Node tests PASS; workflow YAML PASS; Python and JSON validation PASS.
+
+GitHub run `34100837088` on that fix SHA again failed before runner assignment (`runner_id: 0`, empty steps, zero billable milliseconds, no job log). Therefore the code fix is **IMPLEMENTED AND LOCALLY VERIFIED**, while the authoritative Phase 11 gate remains blocked on GitHub-hosted execution.
+
 ## Fresh adversarial regression additions
 
 The repaired Phase 11 tests now require:

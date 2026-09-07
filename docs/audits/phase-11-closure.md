@@ -74,11 +74,20 @@ Corrective process:
 
 Status: **IMPLEMENTED / VERIFICATION REQUIRED**.
 
+### SB-011-009 — worker server startup syntax regression
+
+Repair head `ab85a27b0cb86010400a19254638c20a7897cdb9` contained a missing closing parenthesis in `browser-worker/src/server.mjs`, so the worker entrypoint could not parse. The 24 unit tests passed because they do not import the side-effectful server entrypoint, but the repository-wide syntax gate would reject the file before container execution.
+
+Commit `0ab0edf3527eaf5588dce6e94d3d7cb0a4ceeec7` restored the missing parenthesis. Independent local validation passed the worker syntax check, 24/24 Node tests, workflow YAML parsing, and Python/JSON validation. GitHub run `34100837088` still failed before runner assignment with empty steps, `runner_id: 0`, zero billable milliseconds, and no generated log.
+
+Status: **FIXED / LOCALLY VERIFIED / AUTHORITATIVE CI BLOCKED**.
+
 ## Preserved RED history
 
 - `34083042244`: Phase 11 harness used case-sensitive `Retry-After` lookup; harness corrected.
 - `34083201724`: API emitted fractional `Retry-After`; runtime corrected to a positive integer.
 - approval-record SHA `2eb76e8d92378de0759bf8be2fe181df9dc42013`: nine workflow runs failed before runner acquisition; no test step executed. These failures remain blockers until the repair branch can execute and the canonical full matrix is green.
+- `34100837088` on syntax-fix SHA `0ab0edf3527eaf5588dce6e94d3d7cb0a4ceeec7`: dedicated Phase 11 workflow again failed before runner acquisition; zero steps and zero billable milliseconds.
 
 No RED evidence is discarded or relabeled green.
 

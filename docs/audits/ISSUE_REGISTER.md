@@ -521,6 +521,20 @@ Status: **OPEN / EXTERNALLY BLOCKED**.
 
 Phase 10 is **IN TEST**. Deterministic CI is technically green, but no real third-party account has completed authenticated-state capture and fresh-browser reuse for the strengthened owner-required live criterion. Owner approval and Phase 11 remain blocked.
 
+# Phase 11 issues
+
+### SB-011-009 — worker server startup syntax regression
+
+Severity: High / Gate blocker.
+
+Observed: repair head `ab85a27b0cb86010400a19254638c20a7897cdb9` failed `node --check browser-worker/src/server.mjs` because the `server.listen(...)` statement was missing one closing parenthesis. GitHub-hosted jobs did not reveal it because they failed before runner assignment.
+
+Underlying cause: a server-start logging edit introduced a syntax error, while unit tests did not import the side-effectful server entrypoint. The existing repository-wide syntax gate was correct but could not execute during the Actions outage.
+
+Corrective action: commit `0ab0edf3527eaf5588dce6e94d3d7cb0a4ceeec7` restored the parenthesis. Independent local syntax, 24/24 Node tests, YAML, Python, and JSON checks passed. GitHub run `34100837088` still recorded `runner_id: 0`, no steps, zero billable milliseconds, and no log.
+
+Status: **FIXED / LOCALLY VERIFIED / AUTHORITATIVE CI BLOCKED**.
+
 
 ### SB-010-008 — Live harness was limited to the container browser rejected by requested providers
 
