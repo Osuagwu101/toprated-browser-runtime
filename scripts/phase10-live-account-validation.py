@@ -158,13 +158,13 @@ def close_session(session_id, writer):
         pass
 
 
-def wait_for_admin(ready_file, viewer_opened=False):
+def wait_for_admin(ready_file, viewer_opened=False, timeout_seconds=LOGIN_TIMEOUT_SECONDS):
     print(json.dumps({
         "result": "WAITING_FOR_ADMIN_LOGIN",
         "tool": TOOL,
         "viewerLinkFile": str(LINK_FILE),
         "instruction": "Open the protected one-time viewer link, complete account sign-in in that browser, then return to this terminal and press Enter.",
-        "timeoutSeconds": LOGIN_TIMEOUT_SECONDS,
+        "timeoutSeconds": timeout_seconds,
         "credentialsPrinted": False,
         "rawStatePrinted": False,
         "viewerOpenedAutomatically": viewer_opened,
@@ -176,7 +176,7 @@ def wait_for_admin(ready_file, viewer_opened=False):
 
     if ready_file is None:
         die("Interactive confirmation is unavailable; set PHASE10_ADMIN_LOGIN_READY_FILE.")
-    deadline = time.time() + LOGIN_TIMEOUT_SECONDS
+    deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         if ready_file.is_file():
             ready_file.unlink(missing_ok=True)
@@ -267,7 +267,15 @@ def main():
                 viewer_opened = True
             except OSError:
                 viewer_opened = False
-        wait_for_admin(READY_FILE, viewer_opened)
+        grantExpiresAt = int(grant.get("exp", 0))
+        safeLoginSeconds = grantExpiresAt - int(time.time()) - 30
+        if safeLoginSeconds < 60:
+            die("Administrator viewer grant lifetime is too short for safe login.")
+        wait_for_admin(
+            READY_FILE,
+            viewer_opened,
+            min(LOGIN_TIMEOUT_SECONDS, safeLoginSeconds),
+        )
 
         progress("CAPTURE_AUTHORIZED_STATE")
         code, state = worker_json(

@@ -233,7 +233,7 @@ final class SessionManager
 
             return [
                 'sessionId' => $session->id,
-                'viewerGrant' => $this->viewerGrants->issue($session->worker_session_id, $writerId),
+                'viewerGrant' => $this->issueViewerGrant($session),
             ];
         });
     }
@@ -471,7 +471,7 @@ final class SessionManager
     {
         $viewerGrant = null;
         if ($includeViewerGrant && $session->status === 'active' && $session->worker_session_id !== null) {
-            $viewerGrant = $this->viewerGrants->issue($session->worker_session_id, $session->writer_id);
+            $viewerGrant = $this->issueViewerGrant($session);
         }
 
         return [
@@ -489,6 +489,19 @@ final class SessionManager
             'failureCode' => $session->failure_code,
             'viewerGrant' => $viewerGrant,
         ];
+    }
+
+    private function issueViewerGrant(BrowserSession $session): array
+    {
+        if ($session->worker_session_id === null) {
+            throw new RuntimeApiException('SESSION_NOT_VIEWABLE', 409, 'The browser session is not ready for viewing.');
+        }
+
+        $ttl = str_ends_with($session->tool_slug, '-admin-bootstrap')
+            ? (int) config('browser.admin_viewer_token_ttl_seconds', 900)
+            : null;
+
+        return $this->viewerGrants->issue($session->worker_session_id, $session->writer_id, $ttl);
     }
 
     private function owned(string $sessionId, string $writerId): BrowserSession
