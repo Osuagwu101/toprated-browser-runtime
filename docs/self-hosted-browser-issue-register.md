@@ -492,7 +492,7 @@ Exact verification SHA `362e650b71bbf85c2a592431a3099989d0b76910` passed all aut
 - Phase 9 `34049104660`;
 - Phase 10 `34049104639`.
 
-Phase 10 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. It is not merged or COMPLETE, and Phase 11 has not started.
+Phase 10 is **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**. The owner approved the phase on 2026-09-07; merge and exact-main-head validation remain before final COMPLETE status. Phase 11 has not started.
 
 ### SB-010-007 — Requested live validation providers rejected the managed browser at their security-verification boundary
 
@@ -552,4 +552,4 @@ Status: **FIXED / VERIFIED**.
 
 ## Phase 10 gate status
 
-Phase 10 is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. The provider is demonstrably profile-driven and general-purpose rather than Phrasly-only. The production Browser Use path remains outside this standalone branch and Phase 11 has not started.
+Phase 10 is **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**. The owner explicitly approved the verified technical gate in the project conversation after reviewing the meaning of configuration-driven tool profiles. The provider is demonstrably profile-driven and general-purpose rather than Phrasly-only. The production Browser Use path remains outside this standalone branch and Phase 11 has not started.

@@ -1,6 +1,6 @@
 # Phase 10 Audit — Multi-tool validation
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
+Status: **TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**.
 
 ## Phase anchor
 
@@ -237,4 +237,8 @@ The subsequent experimental Windows debug-profile bootstrap also failed owner-op
 
 No claim is made that the runtime defeats Cloudflare or guarantees automation of every protected provider. A configured provider must permit the managed browser flow. This limitation does not alter the Phase 10 architectural gate, which is generic profile-driven multi-tool support.
 
-**STATUS: TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
+## Owner approval
+
+The owner explicitly approved Phase 10 in the project conversation on 2026-09-07 after reviewing the configuration-driven tool-profile meaning and the exact-head evidence. Phase 11 remains **NOT STARTED** until separately initiated.
+
+**STATUS: TECHNICALLY GREEN / OWNER APPROVED / PROMOTION IN PROGRESS**
