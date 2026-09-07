@@ -42,6 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import copy
           import json
           from pathlib import Path
 
@@ -89,8 +90,14 @@ jobs:
           chatgpt['launch_url'] = 'http://127.0.0.1:19093/chatgpt/'
           chatgpt['browser_state']['allowed_hosts'] = ['127.0.0.1']
 
+          # Clone the same policies under deliberately non-vendor slugs. Running the
+          # full E2E against these names proves behavior is profile-driven, not keyed
+          # to the validation targets or to any special provider branch.
+          profiles['phase10-matrix-url-auth-7f3a'] = copy.deepcopy(stealth)
+          profiles['phase10-matrix-selector-auth-9c2d'] = copy.deepcopy(chatgpt)
+
           destination.write_text(json.dumps(profiles, indent=2) + '\n')
-          print('phase10_ci_profiles=sneakwrite+stealthwriter+chatgpt-loopback-substitution')
+          print('phase10_ci_profiles=three-validation-profiles+two-arbitrary-portability-clones')
           PY
 
       - name: Repository-wide type and syntax gate
@@ -104,8 +111,6 @@ jobs:
           test -f browser-worker/test/multi-auth-tool-fixture.mjs
           test -f tests/phase10-e2e.py
           test -f tests/phase10-multi-auth-e2e.py
-          test -f scripts/phase10-live-account-validation.py
-          test -f scripts/phase10-desktop-live-account-validation.ps1
           test -f docs/audits/phase-10.md
           test -f api/config/tool-profiles.phase10-ci.json
           grep -F 'TOOL_PROFILES_PATH' api/config/browser.php docker-compose.yml
@@ -305,6 +310,12 @@ jobs:
           exit 1
 
       - name: Phase 10 multi-tool one-click-auth E2E
+        run: python3 tests/phase10-multi-auth-e2e.py
+
+      - name: Phase 10 arbitrary-profile portability matrix
+        env:
+          PHASE10_URL_AUTH_TOOL: phase10-matrix-url-auth-7f3a
+          PHASE10_SELECTOR_AUTH_TOOL: phase10-matrix-selector-auth-9c2d
         run: python3 tests/phase10-multi-auth-e2e.py
 
       - name: Verify tool credential and shared-state markers are absent from logs

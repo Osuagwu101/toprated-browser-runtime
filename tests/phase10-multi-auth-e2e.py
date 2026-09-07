@@ -12,6 +12,9 @@ WORKER = os.environ.get('WORKER_BASE', 'http://127.0.0.1:18081')
 SERVICE_SECRET = os.environ['RUNTIME_SERVICE_AUTH_SECRET'].encode()
 WORKER_SECRET = os.environ['WORKER_CONTROL_SECRET']
 OPERATOR_SECRET = os.environ['RUNTIME_OPERATOR_AUTH_SECRET']
+URL_AUTH_TOOL = os.environ.get('PHASE10_URL_AUTH_TOOL', 'stealthwriter')
+SELECTOR_AUTH_TOOL = os.environ.get('PHASE10_SELECTOR_AUTH_TOOL', 'chatgpt')
+assert URL_AUTH_TOOL != SELECTOR_AUTH_TOOL
 
 
 def read_json_response(req, timeout=35):
@@ -86,10 +89,10 @@ def viewer_json(viewer_url, token, action='/status'):
 
 
 def shared_state(tool, valid=True):
-    if tool == 'stealthwriter':
+    if tool == URL_AUTH_TOOL:
         cookie_name = 'stealthwriter-session'
         storage_key = 'stealthwriter-auth'
-    elif tool == 'chatgpt':
+    elif tool == SELECTOR_AUTH_TOOL:
         cookie_name = 'chatgpt-session'
         storage_key = 'chatgpt-auth'
     else:
@@ -134,7 +137,7 @@ def assert_state_not_returned(payload):
 
 
 # Both new one-click profiles require administrator-provided shared browser state.
-for tool in ['stealthwriter', 'chatgpt']:
+for tool in [URL_AUTH_TOOL, SELECTOR_AUTH_TOOL]:
     writer = f'phase10-{tool}-missing-state'
     code, missing = signed('POST', '/api/sessions', writer, {
         'writer_id': writer,
@@ -143,7 +146,7 @@ for tool in ['stealthwriter', 'chatgpt']:
     assert code == 422 and missing.get('code') == 'BROWSER_STATE_REQUIRED', (tool, code, missing)
 
 # Writer traffic cannot become a credential transport for either tool.
-for tool in ['stealthwriter', 'chatgpt']:
+for tool in [URL_AUTH_TOOL, SELECTOR_AUTH_TOOL]:
     writer = f'phase10-{tool}-credential-reject'
     code, rejected = signed('POST', '/api/sessions', writer, {
         'writer_id': writer,
@@ -155,41 +158,41 @@ for tool in ['stealthwriter', 'chatgpt']:
     assert 'phase10-multi-auth-password-marker' not in json.dumps(rejected), rejected
 
 # Host policy remains tool-owned and rejects state from an unrelated origin.
-bad_chatgpt_state = shared_state('chatgpt')
+bad_chatgpt_state = shared_state(SELECTOR_AUTH_TOOL)
 bad_chatgpt_state['authenticated_cookies'][0]['domain'] = 'attacker.invalid'
 code, invalid_host = signed('POST', '/api/sessions', 'phase10-chatgpt-bad-host', {
     'writer_id': 'phase10-chatgpt-bad-host',
-    'tool_slug': 'chatgpt',
+    'tool_slug': SELECTOR_AUTH_TOOL,
     'browser_state': bad_chatgpt_state,
 })
 assert code == 422 and invalid_host.get('code') == 'BROWSER_STATE_INVALID', (code, invalid_host)
 
-# Stealthwriter proves URL-based verification. Stale state redirects away from the
-# configured authenticated dashboard and must latch only Stealthwriter.
+# The first configured profile proves URL-based verification. Stale state redirects away from the
+# configured authenticated dashboard and must latch only that profile.
 stale_writer = 'phase10-stealthwriter-stale'
 code, stale = signed('POST', '/api/sessions', stale_writer, {
     'writer_id': stale_writer,
-    'tool_slug': 'stealthwriter',
-    'browser_state': shared_state('stealthwriter', valid=False),
+    'tool_slug': URL_AUTH_TOOL,
+    'browser_state': shared_state(URL_AUTH_TOOL, valid=False),
 })
 assert_reauth(code, stale)
 assert_state_not_returned(stale)
 
-code, stealth_auth_state = operator('GET', '/api/operator/tool-auth/stealthwriter')
+code, stealth_auth_state = operator('GET', f'/api/operator/tool-auth/{URL_AUTH_TOOL}')
 assert code == 200, (code, stealth_auth_state)
 assert stealth_auth_state['status'] == 'reauth_required', stealth_auth_state
 assert stealth_auth_state['adminActionRequired'] is True, stealth_auth_state
 assert stealth_auth_state['reasonCode'] == 'TOOL_AUTH_NOT_VERIFIED', stealth_auth_state
 
-# A Stealthwriter outage must not poison the independent ChatGPT profile.
+# A URL-auth profile outage must not poison the independent selector-auth profile.
 chat_writer = 'phase10-chatgpt-live'
 code, chat_created = signed('POST', '/api/sessions', chat_writer, {
     'writer_id': chat_writer,
-    'tool_slug': 'chatgpt',
-    'browser_state': shared_state('chatgpt'),
+    'tool_slug': SELECTOR_AUTH_TOOL,
+    'browser_state': shared_state(SELECTOR_AUTH_TOOL),
 })
 assert code == 201 and chat_created['status'] == 'active', (code, chat_created)
-assert chat_created['toolSlug'] == 'chatgpt', chat_created
+assert chat_created['toolSlug'] == SELECTOR_AUTH_TOOL, chat_created
 assert chat_created['reused'] is False, chat_created
 assert_state_not_returned(chat_created)
 
@@ -203,37 +206,37 @@ assert chat_status['authentication']['verified'] is True, chat_status
 # A healthy one-click-auth session is reusable without resending raw state.
 code, chat_reused = signed('POST', '/api/sessions', chat_writer, {
     'writer_id': chat_writer,
-    'tool_slug': 'chatgpt',
+    'tool_slug': SELECTOR_AUTH_TOOL,
 })
 assert code == 200 and chat_reused['reused'] is True, (code, chat_reused)
 assert chat_reused['sessionId'] == chat_created['sessionId'], (chat_created, chat_reused)
 assert_state_not_returned(chat_reused)
 
 # Existing writer ownership remains cross-tool: one writer cannot silently switch
-# an active authenticated ChatGPT browser into a Stealthwriter browser.
+# an active selector-auth browser into a URL-auth browser.
 code, cross_tool = signed('POST', '/api/sessions', chat_writer, {
     'writer_id': chat_writer,
-    'tool_slug': 'stealthwriter',
-    'browser_state': shared_state('stealthwriter'),
+    'tool_slug': URL_AUTH_TOOL,
+    'browser_state': shared_state(URL_AUTH_TOOL),
 })
 assert code == 409 and cross_tool.get('code') == 'WRITER_SESSION_ACTIVE', (code, cross_tool)
 
 code, chat_closed = signed('DELETE', f"/api/sessions/{chat_created['sessionId']}", chat_writer)
 assert code == 200 and chat_closed['status'] == 'closed', (code, chat_closed)
 
-# Clear only the Stealthwriter outage through the existing operator boundary, then
-# prove the same generic shared-state machinery verifies its URL-based profile.
-code, stealth_restored = operator('POST', '/api/operator/tool-auth/stealthwriter/restore')
+# Clear only the URL-auth outage through the existing operator boundary, then
+# prove the same generic shared-state machinery verifies that profile.
+code, stealth_restored = operator('POST', f'/api/operator/tool-auth/{URL_AUTH_TOOL}/restore')
 assert code == 200 and stealth_restored['status'] == 'ready', (code, stealth_restored)
 
 stealth_writer = 'phase10-stealthwriter-live'
 code, stealth_created = signed('POST', '/api/sessions', stealth_writer, {
     'writer_id': stealth_writer,
-    'tool_slug': 'stealthwriter',
-    'browser_state': shared_state('stealthwriter'),
+    'tool_slug': URL_AUTH_TOOL,
+    'browser_state': shared_state(URL_AUTH_TOOL),
 })
 assert code == 201 and stealth_created['status'] == 'active', (code, stealth_created)
-assert stealth_created['toolSlug'] == 'stealthwriter', stealth_created
+assert stealth_created['toolSlug'] == URL_AUTH_TOOL, stealth_created
 assert_state_not_returned(stealth_created)
 
 stealth_token, stealth_grant, stealth_viewer = decode_grant(stealth_created['viewerGrant'])
@@ -246,13 +249,13 @@ assert stealth_status['authentication']['verified'] is True, stealth_status
 code, stealth_closed = signed('DELETE', f"/api/sessions/{stealth_created['sessionId']}", stealth_writer)
 assert code == 200 and stealth_closed['status'] == 'closed', (code, stealth_closed)
 
-# ChatGPT proves selector-based live-auth loss. Moving the private worker to a page
-# without the profile selector must fail the viewer closed and latch only ChatGPT.
+# The selector-auth profile proves live-auth loss. Moving the private worker to a page
+# without the profile selector must fail the viewer closed and latch only that profile.
 chat_loss_writer = 'phase10-chatgpt-live-loss'
 code, chat_loss_created = signed('POST', '/api/sessions', chat_loss_writer, {
     'writer_id': chat_loss_writer,
-    'tool_slug': 'chatgpt',
-    'browser_state': shared_state('chatgpt'),
+    'tool_slug': SELECTOR_AUTH_TOOL,
+    'browser_state': shared_state(SELECTOR_AUTH_TOOL),
 })
 assert code == 201, (code, chat_loss_created)
 loss_token, loss_grant, loss_viewer = decode_grant(chat_loss_created['viewerGrant'])
@@ -270,11 +273,11 @@ assert_reauth(code, frame_blocked)
 
 code, service_observed_loss = signed('POST', '/api/sessions', chat_loss_writer, {
     'writer_id': chat_loss_writer,
-    'tool_slug': 'chatgpt',
+    'tool_slug': SELECTOR_AUTH_TOOL,
 })
 assert_reauth(code, service_observed_loss)
 
-code, chat_auth_state = operator('GET', '/api/operator/tool-auth/chatgpt')
+code, chat_auth_state = operator('GET', f'/api/operator/tool-auth/{SELECTOR_AUTH_TOOL}')
 assert code == 200, (code, chat_auth_state)
 assert chat_auth_state['status'] == 'reauth_required', chat_auth_state
 assert chat_auth_state['adminActionRequired'] is True, chat_auth_state
@@ -285,24 +288,59 @@ assert code == 200, (code, capacity)
 assert capacity['workerActiveSessions'] == 0, capacity
 assert capacity['openSessions'] == 0, capacity
 
-# Operator restore plus fresh shared state makes ChatGPT reusable again.
-code, chat_restored = operator('POST', '/api/operator/tool-auth/chatgpt/restore')
+# Operator restore plus fresh shared state makes the selector-auth profile reusable again.
+code, chat_restored = operator('POST', f'/api/operator/tool-auth/{SELECTOR_AUTH_TOOL}/restore')
 assert code == 200 and chat_restored['status'] == 'ready', (code, chat_restored)
 
 chat_recovery_writer = 'phase10-chatgpt-recovered'
 code, recovered = signed('POST', '/api/sessions', chat_recovery_writer, {
     'writer_id': chat_recovery_writer,
-    'tool_slug': 'chatgpt',
-    'browser_state': shared_state('chatgpt'),
+    'tool_slug': SELECTOR_AUTH_TOOL,
+    'browser_state': shared_state(SELECTOR_AUTH_TOOL),
 })
 assert code == 201 and recovered['status'] == 'active', (code, recovered)
 assert_state_not_returned(recovered)
 code, recovered_closed = signed('DELETE', f"/api/sessions/{recovered['sessionId']}", chat_recovery_writer)
 assert code == 200 and recovered_closed['status'] == 'closed', (code, recovered_closed)
 
+# Two independent configured tools can be active concurrently for different writers.
+url_concurrent_writer = 'phase10-concurrent-url-auth'
+selector_concurrent_writer = 'phase10-concurrent-selector-auth'
+code, url_concurrent = signed('POST', '/api/sessions', url_concurrent_writer, {
+    'writer_id': url_concurrent_writer,
+    'tool_slug': URL_AUTH_TOOL,
+    'browser_state': shared_state(URL_AUTH_TOOL),
+})
+assert code == 201 and url_concurrent['status'] == 'active', (code, url_concurrent)
+code, selector_concurrent = signed('POST', '/api/sessions', selector_concurrent_writer, {
+    'writer_id': selector_concurrent_writer,
+    'tool_slug': SELECTOR_AUTH_TOOL,
+    'browser_state': shared_state(SELECTOR_AUTH_TOOL),
+})
+assert code == 201 and selector_concurrent['status'] == 'active', (code, selector_concurrent)
+assert url_concurrent['sessionId'] != selector_concurrent['sessionId']
+
+url_token, url_grant, url_viewer = decode_grant(url_concurrent['viewerGrant'])
+selector_token, selector_grant, selector_viewer = decode_grant(selector_concurrent['viewerGrant'])
+assert url_grant['sid'] != selector_grant['sid'], (url_grant, selector_grant)
+code, url_concurrent_status = viewer_json(url_viewer, url_token)
+assert code == 200 and url_concurrent_status['title'] == 'STEALTHWRITER_AUTHENTICATED', (code, url_concurrent_status)
+code, selector_concurrent_status = viewer_json(selector_viewer, selector_token)
+assert code == 200 and selector_concurrent_status['title'] == 'CHATGPT_AUTHENTICATED', (code, selector_concurrent_status)
+
+code, concurrent_capacity = signed('GET', '/api/capacity', url_concurrent_writer)
+assert code == 200, (code, concurrent_capacity)
+assert concurrent_capacity['workerActiveSessions'] == 2, concurrent_capacity
+assert concurrent_capacity['openSessions'] == 2, concurrent_capacity
+
+code, url_concurrent_closed = signed('DELETE', f"/api/sessions/{url_concurrent['sessionId']}", url_concurrent_writer)
+assert code == 200 and url_concurrent_closed['status'] == 'closed', (code, url_concurrent_closed)
+code, selector_concurrent_closed = signed('DELETE', f"/api/sessions/{selector_concurrent['sessionId']}", selector_concurrent_writer)
+assert code == 200 and selector_concurrent_closed['status'] == 'closed', (code, selector_concurrent_closed)
+
 # Both authenticated tools finish in ready/verified metadata state with no browser
 # residue and no raw authorized state persisted in these metadata responses.
-for tool in ['stealthwriter', 'chatgpt']:
+for tool in [URL_AUTH_TOOL, SELECTOR_AUTH_TOOL]:
     code, final_auth = operator('GET', f'/api/operator/tool-auth/{tool}')
     assert code == 200, (tool, code, final_auth)
     assert final_auth['status'] == 'ready', final_auth
@@ -319,7 +357,7 @@ print(json.dumps({
     'result': 'PASS',
     'phase': 10,
     'multiToolOneClickAuth': True,
-    'authenticatedTools': ['stealthwriter', 'chatgpt'],
+    'authenticatedTools': [URL_AUTH_TOOL, SELECTOR_AUTH_TOOL],
     'urlBasedAuthenticationVerified': True,
     'selectorBasedAuthenticationVerified': True,
     'sharedStateRequired': True,
@@ -327,6 +365,7 @@ print(json.dumps({
     'toolAuthOutagesAreIndependent': True,
     'activeSessionReuseWithoutStateResend': True,
     'crossToolOwnershipPreserved': True,
+    'concurrentIndependentTools': True,
     'liveAuthenticationLossFailsClosed': True,
     'operatorRecoveryPreserved': True,
     'finalBrowserResidue': 0,
