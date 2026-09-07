@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/health', [HealthController::class, 'show']);
 
-Route::middleware('service.auth')->group(function (): void {
+Route::middleware(['runtime.security:service', 'service.auth'])->group(function (): void {
     Route::get('/capacity', [CapacityController::class, 'show']);
     Route::post('/sessions', [SessionController::class, 'store']);
     Route::get('/sessions/{session}', [SessionController::class, 'show']);
@@ -18,7 +18,7 @@ Route::middleware('service.auth')->group(function (): void {
     Route::delete('/sessions/{session}', [SessionController::class, 'destroy']);
 });
 
-Route::middleware('operator.auth')->prefix('/operator')->group(function (): void {
+Route::middleware(['runtime.security:operator', 'operator.auth'])->prefix('/operator')->group(function (): void {
     Route::get('/tool-auth/{tool}', [ToolAuthController::class, 'show']);
     Route::post('/tool-auth/{tool}/restore', [ToolAuthController::class, 'restore']);
 });
