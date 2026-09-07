@@ -18,7 +18,7 @@ Verified status:
 - Phase 8 — Phrasly reference implementation: **GREEN / COMPLETE / APPROVED**.
 - Phase 9 — authentication-failure behaviour: **GREEN / COMPLETE / APPROVED**.
 - Phase 10 — generic multi-tool validation with SneakWrite, StealthWriter and ChatGPT: **GREEN / COMPLETE / OWNER APPROVED 2026-09-07**.
-- Phase 11 — security hardening: **IMPLEMENTED / VERIFICATION IN PROGRESS / NOT COMPLETE**.
+- Phase 11 — security hardening: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
 
 The existing Browser Use production path remains untouched.
 
@@ -218,7 +218,7 @@ Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNT
 
 ## Blueprint sequencing
 
-Phase 10 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 11 security hardening is implemented on the standalone phase branch and remains **IN VERIFICATION / NOT COMPLETE** until its exact-head Phase 1–11 workflows pass and the owner approves the phase.
+Phase 10 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 11 security hardening has passed its implementation-head Phase 1–11 workflows and is **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**. Its final documentation head is revalidated before approval is requested.
 
 Later work remains outside the Phase 11 claim:
 

@@ -578,7 +578,7 @@ Underlying cause: earlier phases prioritized identity, ownership, isolation and 
 
 Corrective action: add independent service/operator SQLite-backed fixed-window limits and independent worker-control/viewer in-process fixed-window limits. Overflow returns HTTP 429 with a bounded `Retry-After`; health probes remain available.
 
-Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
+Status: **FIXED / VERIFIED**.
 
 ### SB-011-002 — Malformed protected requests lacked one deterministic boundary contract
 
@@ -590,7 +590,7 @@ Underlying cause: validation accumulated route-by-route through earlier function
 
 Corrective action: add protected API request-policy middleware and worker request-security primitives; force all API failures to JSON; bound bytes; require JSON objects; reject protected query strings and method-inappropriate bodies; reject unknown operation fields; preserve credential-specific denial codes.
 
-Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
+Status: **FIXED / VERIFIED**.
 
 ### SB-011-003 — Service writer grammar was enforced only by the launch controller
 
@@ -602,7 +602,7 @@ Underlying cause: downstream ownership routes inherited the signed string withou
 
 Corrective action: validate every signed service writer identifier in authentication middleware before signature acceptance and ownership lookup.
 
-Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
+Status: **FIXED / VERIFIED**.
 
 ## Phase 11 gate status
 
@@ -621,7 +621,7 @@ Underlying cause: the worker correctly returned HTTP 429, `RATE_LIMITED`, and `R
 
 Corrective action: resolve response headers case-insensitively while retaining the required positive `Retry-After` assertion.
 
-Status: **FIXED IN HARNESS / RE-VERIFICATION PENDING**.
+Status: **FIXED / VERIFIED**.
 
 
 ### SB-011-005 — API rate limiter emitted fractional Retry-After seconds
@@ -634,4 +634,11 @@ Underlying cause: Carbon returned a fractional elapsed duration and the API seri
 
 Corrective action: ceiling the remaining duration and cast it to a positive integer before writing the header. The E2E keeps its strict integer and `>= 1` checks.
 
-Status: **FIXED IN CODE / RE-VERIFICATION PENDING**.
+Status: **FIXED / VERIFIED**.
+
+
+## Phase 11 implementation-head evidence
+
+Exact SHA `3944b8e9ea6bb243ca2eb1c6ebd66c93b0e56f42` passed Phase 1–3 run `34083419750`, Phase 4 `34083419755`, Phase 5 `34083419794`, Phase 6 `34083419791`, Phase 7 `34083419806`, Phase 8 `34083419778`, Phase 9 `34083419765`, Phase 10 `34083419795`, and Phase 11 `34083419803`.
+
+All runs completed SUCCESS. Phase 11 is **TECHNICALLY GREEN / FINAL DOCUMENTED-HEAD REVALIDATION IN PROGRESS / OWNER APPROVAL PENDING**.
