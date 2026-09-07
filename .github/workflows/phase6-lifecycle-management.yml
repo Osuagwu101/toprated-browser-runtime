@@ -3,6 +3,7 @@ name: Phase 6 Lifecycle Management
 on:
   push:
     branches:
+      - phase11-security-hardening
       - phase10-multi-tool-one-click-auth
       - phase6-lifecycle-management
       - phase7-tool-profiles

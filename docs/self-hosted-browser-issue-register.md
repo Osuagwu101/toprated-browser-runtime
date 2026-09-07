@@ -564,3 +564,48 @@ Promotion: PR #12 merged the approved branch into `main` at `8f9fc24e14b18e633f1
 Exact-main-head regression evidence: Phase 1–3 `34081524612`, Phase 4 `34081524750`, Phase 5 `34081524578`, Phase 6 `34081524811`, Phase 7 `34081524731`, Phase 8 `34081524949`, Phase 9 `34081524648`, and Phase 10 `34081524813` — all SUCCESS.
 
 Status: **PHASE 10 COMPLETE / OWNER APPROVED**. Phase 11 remains **NOT STARTED**.
+
+
+## Phase 11 security hardening
+
+### SB-011-001 — Protected API and worker boundaries had no request-rate limiter
+
+Severity: High / Phase 11 gate blocker.
+
+RED baseline evidence: approved Phase 10 baseline `0ed34da59138be76c5130e713dfccf932f30ee90` contained no service, operator, worker-control or viewer request limiter.
+
+Underlying cause: earlier phases prioritized identity, ownership, isolation and lifecycle correctness; abuse-volume controls were explicitly deferred to the Blueprint Phase 11 hardening phase.
+
+Corrective action: add independent service/operator SQLite-backed fixed-window limits and independent worker-control/viewer in-process fixed-window limits. Overflow returns HTTP 429 with a bounded `Retry-After`; health probes remain available.
+
+Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
+
+### SB-011-002 — Malformed protected requests lacked one deterministic boundary contract
+
+Severity: High / Phase 11 gate blocker.
+
+RED baseline evidence: Laravel forced JSON only for `RuntimeApiException`; protected inputs did not uniformly reject query strings, unsupported media types, non-object JSON, ignored fields or oversized bodies before controller execution. Worker JSON parsing did not validate media type.
+
+Underlying cause: validation accumulated route-by-route through earlier functional phases rather than at one transport boundary.
+
+Corrective action: add protected API request-policy middleware and worker request-security primitives; force all API failures to JSON; bound bytes; require JSON objects; reject protected query strings and method-inappropriate bodies; reject unknown operation fields; preserve credential-specific denial codes.
+
+Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
+
+### SB-011-003 — Service writer grammar was enforced only by the launch controller
+
+Severity: Medium / defense-in-depth.
+
+RED baseline evidence: the HMAC middleware required a non-empty writer header but the bounded identifier grammar was applied only during session creation.
+
+Underlying cause: downstream ownership routes inherited the signed string without applying the launch route's identifier grammar.
+
+Corrective action: validate every signed service writer identifier in authentication middleware before signature acceptance and ownership lookup.
+
+Status: **FIXED IN CODE / CI VERIFICATION PENDING**.
+
+## Phase 11 gate status
+
+Implementation branch: `phase11-security-hardening`. Baseline: `0ed34da59138be76c5130e713dfccf932f30ee90`.
+
+The dedicated adversarial workflow and all inherited Phase 1–10 workflows must pass on one exact documented branch head. Phase 11 remains **NOT COMPLETE / OWNER APPROVAL NOT YET REQUESTED**.

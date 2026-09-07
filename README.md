@@ -18,6 +18,7 @@ Verified status:
 - Phase 8 — Phrasly reference implementation: **GREEN / COMPLETE / APPROVED**.
 - Phase 9 — authentication-failure behaviour: **GREEN / COMPLETE / APPROVED**.
 - Phase 10 — generic multi-tool validation with SneakWrite, StealthWriter and ChatGPT: **GREEN / COMPLETE / OWNER APPROVED 2026-09-07**.
+- Phase 11 — security hardening: **IMPLEMENTED / VERIFICATION IN PROGRESS / NOT COMPLETE**.
 
 The existing Browser Use production path remains untouched.
 
@@ -126,7 +127,7 @@ The current Phase 8 audit is recorded in `docs/audits/phase-8.md`.
 
 ## Architecture
 
-- `api/` — Laravel control plane: signed service API, persistent session records, writer ownership, generic tool-profile/state policy, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
+- `api/` — Laravel control plane: signed and rate-limited service/operator APIs, strict JSON request policy, persistent session records, writer ownership, generic tool-profile/state policy, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
 - `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated Chromium profiles, ephemeral authorized-state injection, generic authentication verification, restricted frame/input viewer and exact per-session cleanup.
 - `docker-compose.yml` — portable Linux + Docker topology with persistent runtime DB storage and localhost-only host publication for the current development/CI environment.
 - `scripts/typecheck.sh` — repository-wide executable type/syntax/configuration gate for the current language/toolchain.
@@ -172,7 +173,7 @@ Signed service routes:
 - `POST /api/sessions/{id}/viewer-grant`
 - `DELETE /api/sessions/{id}`
 
-Service requests are HMAC-SHA256 signed with timestamp, nonce, writer identity and request-body hash. Replayed nonces are rejected. Worker lifecycle endpoints require a separate internal worker-control secret.
+Service requests are HMAC-SHA256 signed with timestamp, nonce, bounded writer identity and request-body hash. Replayed nonces are rejected. Protected API routes reject unsigned query strings, malformed/non-object JSON, unsupported media types, oversized bodies and excess request rates. Worker lifecycle endpoints require a separate internal worker-control secret and enforce their own malformed-request and rate-limit boundary.
 
 `MAX_BROWSER_SESSIONS` remains validated configuration up to the Blueprint design ceiling of 15. Empirical 5/10/15 concurrency proof remains Phase 18 work.
 
@@ -217,16 +218,13 @@ Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNT
 
 ## Blueprint sequencing
 
-Phase 8 is **GREEN / COMPLETE / APPROVED**. The following work remains later-phase work and is not claimed:
+Phase 10 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 11 security hardening is implemented on the standalone phase branch and remains **IN VERIFICATION / NOT COMPLETE** until its exact-head Phase 1–11 workflows pass and the owner approves the phase.
 
-- Phase 9 authentication-failure/admin-reauth behavior;
-- Phase 10 second-tool proof;
-- Phase 11 security hardening beyond inherited/current controls;
+Later work remains outside the Phase 11 claim:
+
 - Phase 12/18 empirical resource and concurrency measurements;
-- Phase 14 production-host deployment;
+- Phase 14 production-host deployment; and
 - Phase 15 production provider integration.
-
-The Phase 8 live Phrasly exit gate is demonstrated and owner approval was received on 2026-09-06. Phase 9 is eligible but remains not started until explicit instruction.
 
 ## Financial rule
 

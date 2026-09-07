@@ -3,6 +3,7 @@ name: Phase 8 Phrasly Reference Implementation
 on:
   push:
     branches:
+      - phase11-security-hardening
       - phase10-multi-tool-one-click-auth
       - phase8-phrasly-reference
       - main

@@ -33,6 +33,10 @@ final class EnforceRuntimeRequestPolicy
         }
 
         if (trim($content) !== '') {
+            if (in_array(strtoupper($request->method()), ['GET', 'DELETE'], true)) {
+                throw new RuntimeApiException('REQUEST_BODY_FORBIDDEN', 400, 'This runtime method does not accept a request body.');
+            }
+
             $contentType = strtolower(trim((string) $request->header('Content-Type', '')));
             if (! preg_match('/^application\/json(?:\s*;|$)/', $contentType)) {
                 throw new RuntimeApiException('UNSUPPORTED_MEDIA_TYPE', 415, 'Runtime request bodies must use application/json.');
