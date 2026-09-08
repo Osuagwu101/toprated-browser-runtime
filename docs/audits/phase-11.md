@@ -1,6 +1,6 @@
 # Phase 11 — Security Hardening Audit
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**
+Status: **COMPLETE / OWNER APPROVED 2026-09-08**
 
 Date opened: 2026-09-07  
 Canonical branch: `phase11-security-hardening`  
@@ -189,8 +189,22 @@ Every job completed successfully with normal steps and no failed step. Productio
 
 ## Gate status
 
-The Phase 11 exit gate—security tests reject unauthorized paths—is satisfied on exact repair checkpoint `93e380dad9b53f56bdca559cbf10f8a1864dfdc3`. The dedicated security workflow and every inherited Phase 1–10 workflow passed.
+The Phase 11 exit gate—security tests reject unauthorized paths—is satisfied. The dedicated security workflow and every inherited Phase 1–10 workflow passed on repair checkpoint `93e380dad9b53f56bdca559cbf10f8a1864dfdc3` and again on final documented head `38829be9f5b60bfd51820418bd92e41772c95917`.
 
-Status: **TECHNICALLY GREEN / AWAITING OWNER APPROVAL**.
+Final documented-head runs:
 
-Phase 12 remains locked until the owner explicitly approves Phase 11 completion.
+- Phase 1–3: `34183921657`;
+- Phase 4: `34183921681`;
+- Phase 5: `34183921688`;
+- Phase 6: `34183921652`;
+- Phase 7: `34183921656`;
+- Phase 8: `34183921678`;
+- Phase 9: `34183921647`;
+- Phase 10: `34183921661`; and
+- Phase 11: `34183921668`.
+
+The owner explicitly approved Phase 11 on 2026-09-08.
+
+Status: **COMPLETE / OWNER APPROVED**.
+
+Phase 12 is **NOT STARTED** and begins only after the approved Phase 11 head is promoted and revalidated on `main`.
