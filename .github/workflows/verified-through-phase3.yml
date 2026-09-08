@@ -3,6 +3,8 @@ name: Verified Through Phase 3
 on:
   push:
     branches:
+      - phase11-security-hardening
+      - phase11-security-hardening-v2
       - phase10-multi-tool-one-click-auth
       - verified-through-phase3
       - phase4-ci-baseline-fix

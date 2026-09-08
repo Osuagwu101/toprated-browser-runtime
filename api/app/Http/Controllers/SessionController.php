@@ -37,6 +37,11 @@ final class SessionController
             }
         }
 
+        $allowedFields = ['writer_id', 'tool_slug', 'launch_url', 'browser_state'];
+        if (array_diff(array_keys($body), $allowedFields) !== []) {
+            throw new RuntimeApiException('UNSUPPORTED_LAUNCH_FIELDS', 422, 'Launch request contains unsupported fields.');
+        }
+
         $profile = $toolProfiles->resolve($toolSlug, $writerId);
         if (array_key_exists('launch_url', $body)) {
             $suppliedLaunchUrl = trim((string) $request->input('launch_url', ''));
@@ -75,22 +80,32 @@ final class SessionController
 
     public function heartbeat(Request $request, string $session, SessionManager $sessions): JsonResponse
     {
+        $this->assertEmptyBody($request);
         return response()->json($sessions->heartbeat($session, $this->writerId($request)));
     }
 
     public function activity(Request $request, string $session, SessionManager $sessions): JsonResponse
     {
+        $this->assertEmptyBody($request);
         return response()->json($sessions->activity($session, $this->writerId($request)));
     }
 
     public function viewerGrant(Request $request, string $session, SessionManager $sessions): JsonResponse
     {
+        $this->assertEmptyBody($request);
         return response()->json($sessions->viewerGrant($session, $this->writerId($request)));
     }
 
     public function destroy(Request $request, string $session, SessionManager $sessions): JsonResponse
     {
         return response()->json($sessions->close($session, $this->writerId($request)));
+    }
+
+    private function assertEmptyBody(Request $request): void
+    {
+        if ($request->all() !== []) {
+            throw new RuntimeApiException('REQUEST_BODY_FORBIDDEN', 422, 'This runtime operation accepts no request fields.');
+        }
     }
 
     private function writerId(Request $request): string

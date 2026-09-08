@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\RuntimeApiException;
+use App\Http\Middleware\EnforceRuntimeRequestPolicy;
 use App\Http\Middleware\VerifyOperatorRequest;
 use App\Http\Middleware\VerifyServiceRequest;
 use Illuminate\Foundation\Application;
@@ -16,11 +17,14 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
+            'runtime.security' => EnforceRuntimeRequestPolicy::class,
             'service.auth' => VerifyServiceRequest::class,
             'operator.auth' => VerifyOperatorRequest::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->shouldRenderJsonWhen(fn (Request $request): bool => $request->is('api/*'));
+
         $exceptions->render(function (RuntimeApiException $exception, Request $request) {
             if (! $request->is('api/*')) {
                 return null;

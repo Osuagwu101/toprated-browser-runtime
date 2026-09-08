@@ -1,0 +1,178 @@
+name: Phase 11 Security Hardening
+
+on:
+  push:
+    branches:
+      - phase11-security-hardening
+      - phase11-security-hardening-v2
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase11-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  RUNTIME_SERVICE_AUTH_SECRET: phase11-ci-service-auth-secret-not-for-production-0123456789abcdef
+  RUNTIME_OPERATOR_AUTH_SECRET: phase11-ci-operator-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase11-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  SERVICE_RATE_LIMIT_PER_MINUTE: 100
+  OPERATOR_RATE_LIMIT_PER_MINUTE: 8
+  RUNTIME_API_MAX_REQUEST_BYTES: 327680
+  WORKER_CONTROL_RATE_LIMIT_PER_MINUTE: 40
+  VIEWER_RATE_LIMIT_PER_MINUTE: 20
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 5
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+  BROWSER_STATE_MAX_BYTES: 262144
+  BROWSER_DISPLAY_MODE: virtual-display
+
+jobs:
+  phase11-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository-wide type and syntax gate
+        run: bash scripts/typecheck.sh
+
+      - name: Security unit and static gates
+        run: |
+          set -euo pipefail
+          node --test browser-worker/test/*.test.mjs
+          test -f browser-worker/src/session-policy-store.mjs
+          test -f tests/phase11-security-e2e.py
+          test -f docs/audits/phase-11.md
+          grep -F "viewerClientRateLimiter" browser-worker/src/server.mjs
+          grep -F "maxBuckets" browser-worker/src/rate-limit.mjs
+          grep -F "runtime.security:service" api/routes/api.php
+          grep -F "runtime.security:operator" api/routes/api.php
+          grep -F -- "--remote-debugging-address=127.0.0.1" browser-worker/src/browser-session.mjs
+          grep -F -- "--remote-debugging-port=0" browser-worker/src/browser-session.mjs
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+          if grep -R --line-number -E '/var/run/docker\.sock|network_mode:[[:space:]]*host|privileged:[[:space:]]*true|cap_add:' docker-compose.yml; then
+            echo 'Unsafe Docker or host-network exposure found.' >&2
+            exit 1
+          fi
+
+      - name: Validate Compose isolation contract
+        run: |
+          set -euo pipefail
+          docker compose config --format json >/tmp/phase11-compose.json
+          python3 - <<'PY'
+          import json
+          cfg=json.load(open('/tmp/phase11-compose.json'))
+          for name, target in [('api',8080),('browser-worker',8081)]:
+              service=cfg['services'][name]
+              assert service.get('network_mode') != 'host', service
+              assert service.get('privileged') is not True, service
+              assert not service.get('cap_add'), service
+              assert all('/var/run/docker.sock' not in str(v) for v in service.get('volumes',[])), service
+              ports=service.get('ports',[])
+              match=[p for p in ports if int(p.get('target',0))==target]
+              assert len(match)==1 and match[0].get('host_ip')=='127.0.0.1', (name,ports)
+          assert cfg['networks']['browser-runtime']['driver']=='bridge', cfg['networks']
+          print('compose_isolation=pass')
+          PY
+
+      - name: Build Phase 11 containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
+
+      - name: Boot isolated runtime
+        run: docker compose up -d api browser-worker
+
+      - name: Wait for readiness
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase11-api-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase11-worker-health.json; then
+              cat /tmp/phase11-api-health.json
+              cat /tmp/phase11-worker-health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --no-color
+          exit 1
+
+      - name: Verify runtime ports are loopback-only
+        run: |
+          set -euo pipefail
+          test "$(docker compose port api 8080)" = "127.0.0.1:18080"
+          test "$(docker compose port browser-worker 8081)" = "127.0.0.1:18081"
+          docker inspect "$(docker compose ps -q api)" "$(docker compose ps -q browser-worker)" > /tmp/phase11-inspect.json
+          python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/phase11-inspect.json'))
+          for container in data:
+              assert container['HostConfig']['NetworkMode'] != 'host', container['Name']
+              assert container['HostConfig']['Privileged'] is False, container['Name']
+              assert not container['HostConfig']['CapAdd'], container['Name']
+              assert all(m['Destination']!='/var/run/docker.sock' for m in container.get('Mounts',[])), container['Name']
+          print('runtime_network_boundary=pass')
+          PY
+
+      - name: Phase 11 adversarial security matrix
+        run: python3 tests/phase11-security-e2e.py
+
+      - name: Verify sensitive markers and secrets never reached logs
+        run: |
+          set -euo pipefail
+          docker compose logs --no-color api browser-worker >/tmp/phase11-runtime.log
+          for marker in 'must-never-reach-runtime' "$RUNTIME_SERVICE_AUTH_SECRET" "$RUNTIME_OPERATOR_AUTH_SECRET" "$WORKER_CONTROL_SECRET" "$VIEWER_SIGNING_SECRET"; do
+            if grep -F "$marker" /tmp/phase11-runtime.log; then
+              echo "sensitive_value_in_logs=$marker" >&2
+              exit 1
+            fi
+          done
+          echo 'phase11_sensitive_logs=clean'
+
+      - name: Verify no browser process, profile, or open record residue
+        run: |
+          set -euo pipefail
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs = require('node:fs');
+          const chromium = [];
+          for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            try { if (fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim() === 'chromium') chromium.push(Number(entry)); } catch {}
+          }
+          if (chromium.length) { console.error(`orphan chromium processes: ${chromium.join(',')}`); process.exit(1); }
+          const profiles = fs.readdirSync('/tmp').filter((name) => name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(`orphan browser profiles: ${profiles.join(',')}`); process.exit(1); }
+          console.log('phase11_cleanup_scan=clean');
+          NODE
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "open_sessions=0\n";
+          '
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"

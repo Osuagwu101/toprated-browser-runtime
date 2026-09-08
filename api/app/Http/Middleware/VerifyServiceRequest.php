@@ -26,6 +26,9 @@ final class VerifyServiceRequest
         if (! ctype_digit($timestampHeader) || $nonce === '' || $signature === '' || $writerId === '') {
             throw new RuntimeApiException('AUTH_REQUIRED', 401, 'A signed service request is required.');
         }
+        if (strlen($writerId) > 191 || ! preg_match('/^[A-Za-z0-9._-]+$/', $writerId)) {
+            throw new RuntimeApiException('AUTH_INVALID_WRITER', 401, 'The signed writer identity is invalid.');
+        }
         if (! preg_match('/^[A-Za-z0-9_-]{16,128}$/', $nonce)) {
             throw new RuntimeApiException('AUTH_INVALID_NONCE', 401, 'The service request nonce is invalid.');
         }

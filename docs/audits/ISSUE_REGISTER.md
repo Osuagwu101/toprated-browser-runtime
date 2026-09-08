@@ -521,6 +521,33 @@ Status: **OPEN / EXTERNALLY BLOCKED**.
 
 Phase 10 is **IN TEST**. Deterministic CI is technically green, but no real third-party account has completed authenticated-state capture and fresh-browser reuse for the strengthened owner-required live criterion. Owner approval and Phase 11 remain blocked.
 
+# Phase 11 issues
+
+### SB-011-009 — worker server startup syntax regression
+
+Severity: High / Gate blocker.
+
+Observed: repair head `ab85a27b0cb86010400a19254638c20a7897cdb9` failed `node --check browser-worker/src/server.mjs` because the `server.listen(...)` statement was missing one closing parenthesis. GitHub-hosted jobs did not reveal it because they failed before runner assignment.
+
+Underlying cause: a server-start logging edit introduced a syntax error, while unit tests did not import the side-effectful server entrypoint. The existing repository-wide syntax gate was correct but could not execute during the Actions outage.
+
+Corrective action: commit `0ab0edf3527eaf5588dce6e94d3d7cb0a4ceeec7` restored the parenthesis. Independent local syntax, 24/24 Node tests, YAML, Python, and JSON checks passed. GitHub run `34100837088` preserved the pre-run failure evidence. After the repository became public, run `34101080702` attempt 2 acquired a runner and passed every Phase 11 step. Exact-head run `34183463821` then passed again on `93e380dad9b53f56bdca559cbf10f8a1864dfdc3`.
+
+Status: **FIXED / VERIFIED / CLOSED**.
+
+
+### SB-011-010 — private-repository Actions billing restriction prevented runner allocation
+
+Severity: High / external verification blocker.
+
+Observed: approval-record SHA `2eb76e8d92378de0759bf8be2fe181df9dc42013` and later repair runs produced completed failures with no runner and no steps. GitHub displayed the account annotation that the job was not started because recent account payments had failed or the spending limit required attention.
+
+Underlying cause: account-level billing/spending enforcement prevented GitHub-hosted runner allocation for the private repository. The local computer and application code were not involved because execution stopped before checkout.
+
+Corrective action: the owner changed the standalone repository visibility to public. GitHub Actions then accepted run `34101080702` attempt 2, assigned a runner, and passed the complete Phase 11 workflow. Commit `93e380dad9b53f56bdca559cbf10f8a1864dfdc3` added the repair branch to the inherited workflow triggers; all nine authoritative workflows ran and passed on that exact SHA.
+
+Status: **RESOLVED / VERIFIED / CLOSED**.
+
 
 ### SB-010-008 — Live harness was limited to the container browser rejected by requested providers
 

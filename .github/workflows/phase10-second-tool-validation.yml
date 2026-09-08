@@ -3,6 +3,8 @@ name: Phase 10 Second-Tool Validation
 on:
   push:
     branches:
+      - phase11-security-hardening
+      - phase11-security-hardening-v2
       - phase10-second-tool-validation
       - phase10-multi-tool-one-click-auth
       - main

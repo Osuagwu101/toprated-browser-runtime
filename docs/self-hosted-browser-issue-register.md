@@ -564,3 +564,81 @@ Promotion: PR #12 merged the approved branch into `main` at `8f9fc24e14b18e633f1
 Exact-main-head regression evidence: Phase 1–3 `34081524612`, Phase 4 `34081524750`, Phase 5 `34081524578`, Phase 6 `34081524811`, Phase 7 `34081524731`, Phase 8 `34081524949`, Phase 9 `34081524648`, and Phase 10 `34081524813` — all SUCCESS.
 
 Status: **PHASE 10 COMPLETE / OWNER APPROVED**. Phase 11 remains **NOT STARTED**.
+
+
+## Phase 11 security hardening
+
+### SB-011-001 — Protected API and worker boundaries had no request-rate limiter
+
+Severity: High / Phase 11 gate blocker.
+
+RED baseline evidence: approved Phase 10 baseline `0ed34da59138be76c5130e713dfccf932f30ee90` contained no service, operator, worker-control or viewer request limiter.
+
+Underlying cause: earlier phases prioritized identity, ownership, isolation and lifecycle correctness; abuse-volume controls were explicitly deferred to the Blueprint Phase 11 hardening phase.
+
+Corrective action: add independent service/operator SQLite-backed fixed-window limits and independent worker-control/viewer in-process fixed-window limits. Overflow returns HTTP 429 with a bounded `Retry-After`; health probes remain available.
+
+Status: **FIXED / VERIFIED**.
+
+### SB-011-002 — Malformed protected requests lacked one deterministic boundary contract
+
+Severity: High / Phase 11 gate blocker.
+
+RED baseline evidence: Laravel forced JSON only for `RuntimeApiException`; protected inputs did not uniformly reject query strings, unsupported media types, non-object JSON, ignored fields or oversized bodies before controller execution. Worker JSON parsing did not validate media type.
+
+Underlying cause: validation accumulated route-by-route through earlier functional phases rather than at one transport boundary.
+
+Corrective action: add protected API request-policy middleware and worker request-security primitives; force all API failures to JSON; bound bytes; require JSON objects; reject protected query strings and method-inappropriate bodies; reject unknown operation fields; preserve credential-specific denial codes.
+
+Status: **FIXED / VERIFIED**.
+
+### SB-011-003 — Service writer grammar was enforced only by the launch controller
+
+Severity: Medium / defense-in-depth.
+
+RED baseline evidence: the HMAC middleware required a non-empty writer header but the bounded identifier grammar was applied only during session creation.
+
+Underlying cause: downstream ownership routes inherited the signed string without applying the launch route's identifier grammar.
+
+Corrective action: validate every signed service writer identifier in authentication middleware before signature acceptance and ownership lookup.
+
+Status: **FIXED / VERIFIED**.
+
+## Phase 11 gate status
+
+Implementation branch: `phase11-security-hardening`. Baseline: `0ed34da59138be76c5130e713dfccf932f30ee90`.
+
+The dedicated adversarial workflow and all inherited Phase 1–10 workflows must pass on one exact documented branch head. Phase 11 remains **NOT COMPLETE / OWNER APPROVAL NOT YET REQUESTED**.
+
+
+### SB-011-004 — Phase 11 harness treated HTTP header names as case-sensitive
+
+Severity: Test blocker / no runtime defect.
+
+RED evidence: Phase 11 run `34083042244` on `933cc5a4588b888b9754550157c6d69d4b7e684b`.
+
+Underlying cause: the worker correctly returned HTTP 429, `RATE_LIMITED`, and `Retry-After`, but Python's response-header mapping normalized the header spelling and the harness used an exact-case dictionary key.
+
+Corrective action: resolve response headers case-insensitively while retaining the required positive `Retry-After` assertion.
+
+Status: **FIXED / VERIFIED**.
+
+
+### SB-011-005 — API rate limiter emitted fractional Retry-After seconds
+
+Severity: Medium / protocol-compliance test blocker.
+
+RED evidence: Phase 11 run `34083201724` on `f46b08ce49301f28a4d90bcc80a8430e6c392812`.
+
+Underlying cause: Carbon returned a fractional elapsed duration and the API serialized the remaining window directly, producing `Retry-After: 55.98489`.
+
+Corrective action: ceiling the remaining duration and cast it to a positive integer before writing the header. The E2E keeps its strict integer and `>= 1` checks.
+
+Status: **FIXED / VERIFIED**.
+
+
+## Phase 11 implementation-head evidence
+
+Exact SHA `3944b8e9ea6bb243ca2eb1c6ebd66c93b0e56f42` passed Phase 1–3 run `34083419750`, Phase 4 `34083419755`, Phase 5 `34083419794`, Phase 6 `34083419791`, Phase 7 `34083419806`, Phase 8 `34083419778`, Phase 9 `34083419765`, Phase 10 `34083419795`, and Phase 11 `34083419803`.
+
+All runs completed SUCCESS. Phase 11 is **TECHNICALLY GREEN / FINAL DOCUMENTED-HEAD REVALIDATION IN PROGRESS / OWNER APPROVAL PENDING**.
