@@ -2,7 +2,7 @@
 
 ## Phase anchor
 
-- Status: TECHNICALLY GREEN / AWAITING OWNER APPROVAL
+- Status: COMPLETE
 - Blueprint: Master Blueprint v1.1
 - Verified baseline: `main` at `1e12108cbd812cbf8a78d8266adc03847190e804`
 - Last accepted phase: Phase 12
@@ -95,13 +95,18 @@ A direct TCP/SSH probe from the engineering workspace could not be performed bec
 | Phase 11 Security Hardening | 34214919753 | SUCCESS |
 | Phase 12 Performance Evidence | 34214919952 | SUCCESS |
 
-The closure-record commit produced by this update must also pass the inherited workflows. Its immutable run metadata remains attached to that exact commit in GitHub Actions and PR #15; no further evidence-only commit is required.
+The technical-closure head `dac59feb8fd693552760f8210c5004e341fe87d9` also passed all 10 inherited workflows. Its immutable run IDs are recorded in PR #15. The approval-record commit produced by this update must pass the same inherited workflows before promotion.
 
 ## Gate assessment
 
-The blueprint Phase 13 exit gate, “VPS exists; access available for deployment,” is satisfied by the verified provider record, active VPS indicator, issued public addressing, Ubuntu 24.04 installation, and owner-held administrative access material. Phase 13 is technically green and awaits explicit owner approval after the closure-record head passes inherited validation.
+The blueprint Phase 13 exit gate, “VPS exists; access available for deployment,” is satisfied by the verified provider record, active VPS indicator, issued public addressing, Ubuntu 24.04 installation, and owner-held administrative access material. The owner explicitly approved Phase 13 completion on 2026-09-08 after the closure-record head passed all inherited validation.
 
 Known limitation carried to Phase 14: the first authenticated SSH connection cannot be tested from the current engineering workspace because direct arbitrary-IP routing is unavailable. Phase 14 must establish the live SSH session, rotate the initial credential, install an owner-controlled SSH key, and harden access before deployment.
+
+## Owner approval
+
+- Approval: explicit owner response, `Approved`, on 2026-09-08.
+- Authorized action: mark Phase 13 COMPLETE and promote PR #15 after the exact approval-record branch head passes inherited validation.
 
 ## Evidence ledger
 
@@ -109,3 +114,4 @@ Known limitation carried to Phase 14: the first authenticated SSH connection can
 - Purchase-evidence head: `3b7020e479ff4bddf902118899863addfb0a9f7d`.
 - Owner-only purchase/provisioning evidence: verified from safely redacted Contabo service, VPS-control, inbox, and credential-table screenshots plus the owner's confirmation that the access row is populated.
 - Exact purchase-evidence-head regressions: 10/10 completed successfully; run IDs recorded above.
+- Technical-closure head `dac59feb8fd693552760f8210c5004e341fe87d9`: 10/10 completed successfully; immutable run IDs recorded in PR #15.
