@@ -3,6 +3,7 @@ name: Phase 12 Performance Evidence
 on:
   push:
     branches:
+      - phase13-vps-selection
       - phase12-performance-testing
       - main
   workflow_dispatch:
