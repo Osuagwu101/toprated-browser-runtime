@@ -6,6 +6,7 @@ import concurrent.futures
 import hashlib
 import hmac
 import json
+import math
 import os
 import platform
 import re
@@ -25,7 +26,8 @@ def percentile(values, fraction):
     ordered = sorted(values)
     if not ordered:
         return None
-    return round(ordered[min(len(ordered) - 1, int((len(ordered) - 1) * fraction))], 2)
+    nearest_rank = max(1, math.ceil(fraction * len(ordered)))
+    return round(ordered[nearest_rank - 1], 2)
 
 
 def summary(values):

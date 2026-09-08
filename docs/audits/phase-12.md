@@ -34,4 +34,6 @@ GitHub-hosted runner results provide a reproducible comparative baseline for Pha
 
 ## Evidence ledger
 
-Pending first execution on the exact Phase 12 branch head.
+- Run 34188600086 on `6dd01c9202216709c1de97027ee1207e067c1dad` executed every Phase 12 step successfully and produced artifact `10041422225` (`sha256:2cd93deb9fe0437b6b0c00c6be280a07c4153e861b12df421db147ac53b47169`).
+- Review of that artifact found that the p95 helper used a floor index. For small sample sets this understated tail latency, so those percentile summaries are superseded and are not accepted as sizing evidence.
+- Corrected measurements and exact-head regression results are pending.
