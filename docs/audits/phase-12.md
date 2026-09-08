@@ -2,10 +2,10 @@
 
 ## Phase anchor
 
-- Status: IN TEST
+- Status: COMPLETE
 - Blueprint: Master Blueprint v1.1
 - Baseline: `main` at `5e6bd28ae3664b96b20b5f598fabe0ed9c3091ef`
-- Last accepted phase: Phase 11
+- Last accepted phase: Phase 12 (owner approved 2026-09-08)
 - Exit gate: measured evidence for server sizing, not assumptions
 
 ## Audit report
@@ -58,3 +58,20 @@ At the tested workload, browser-worker memory rose to approximately 0.36 GiB at 
 Session creation is intentionally serialized by `SessionManager::withCreationLock()` to protect global capacity and ownership invariants. The roughly linear concurrent-batch startup time is therefore an expected safety tradeoff, not proof of CPU saturation.
 
 An exact-head run of the Phase 12 gate and every inherited Phase 1–11 regression is required immediately before owner approval. The immutable workflow run links are recorded in the Phase 12 pull request.
+
+## Completion record
+
+- Owner approval: explicitly provided in the project session on 2026-09-08.
+- Promotion: PR #14 merged to `main` as `42f0d07856b5ed2b848f1c0f9952d6f760db4dd8`.
+- Main promotion validation: all authoritative Phase 1–12 workflows completed successfully on the merge commit.
+- Verified Through Phase 3: run 34191945046.
+- Phase 4: run 34191944962.
+- Phase 5: run 34191945134.
+- Phase 6: run 34191945015.
+- Phase 7: run 34191945079.
+- Phase 8: run 34191944977.
+- Phase 9: run 34191945019.
+- Phase 10: run 34191945030.
+- Phase 11: run 34191945005.
+- Phase 12: run 34191945024.
+- Closure rule: the documentation commit that records completion must itself pass the same exact-head workflow set.
