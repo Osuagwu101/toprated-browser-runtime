@@ -3,6 +3,7 @@ name: Phase 8 Phrasly Reference Implementation
 on:
   push:
     branches:
+      - phase13-vps-selection
       - phase12-performance-testing
       - phase11-security-hardening
       - phase11-security-hardening-v2
