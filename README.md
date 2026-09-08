@@ -4,7 +4,7 @@ Standalone, Docker-portable self-hosted browser runtime for Top Rated SEO Tools.
 
 ## Verified source of truth
 
-This private repository is the standalone source of truth for the self-hosted browser provider.
+This public repository is the standalone source of truth for the self-hosted browser provider. Runtime credentials, authorized browser state, and deployment secrets remain external to source control.
 
 Verified status:
 
