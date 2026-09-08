@@ -48,7 +48,7 @@
 - Evidence: run `34225639108`, job `102058965528`, failed in `Validate deployment files` because `phase14/scripts/bootstrap_ubuntu.sh` did not exist in the checkout.
 - Underlying cause: the first repository commit retained the local staging-directory prefix even though files were committed at repository-root `scripts/` and `deploy/` paths.
 - Corrective action: changed every workflow, bootstrap, and operator-document path to the exact committed repository path.
-- Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
+- Status: FIXED / CLOSED. The corrected path step passed in run `34225926344` and later runs.
 
 ### SB-014-006 — Compose isolation assertion depended on display formatting
 
@@ -56,7 +56,7 @@
 - Evidence: run `34225926344`, job `102059914824`, passed file validation and `docker compose ... config --quiet`, then failed the compact-string port grep in `Validate production Compose merge`.
 - Underlying cause: current Docker Compose renders published ports as structured YAML fields rather than the compact `127.0.0.1:18080` string assumed by the test.
 - Corrective action: validate Compose JSON with exact `target`, `published`, and `host_ip` assertions for API, worker, and HTTPS ingress.
-- Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
+- Status: FIXED / CLOSED. The structured topology assertions passed in run `34226248226` and later runs.
 
 ### SB-014-007 — Secret scanner treated the documented placeholder as a secret
 
@@ -64,7 +64,15 @@
 - Evidence: run `34226248226`, job `102060981096`, passed syntax, Compose topology, and Caddy policy validation, then matched `.env.example`'s explicit `replace-with-...` service-secret placeholder.
 - Underlying cause: the scanner classified any long assignment as secret material without excluding the repository's required placeholder-only environment template.
 - Corrective action: exclude only `.env.example` and this workflow's synthetic test fixture while continuing to scan all other tracked files for private keys and long service-secret assignments.
-- Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
+- Status: FIXED / CLOSED. Run `34226542046` completed the full readiness workflow successfully.
+
+### SB-014-008 — Inherited workflows omitted the Phase 14 branch trigger
+
+- Severity: MAJOR / regression-gate blocker.
+- Evidence: after draft PR #16 opened at `f7fed4361bee77138d5e9e50aa60449dfbb6a3c3`, only Phase 14 readiness executed; the ten inherited workflow files listed earlier phase branches explicitly and did not include `phase14-contabo-deployment`.
+- Underlying cause: branch triggers require manual extension for each phase branch.
+- Corrective action: add `phase14-contabo-deployment` to every inherited workflow without changing any test command or acceptance criterion.
+- Status: FIX IMPLEMENTED, IN TEST.
 
 ## Verification required
 

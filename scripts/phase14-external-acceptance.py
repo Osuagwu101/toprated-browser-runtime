@@ -13,7 +13,7 @@ from urllib import error, parse, request
 
 BASE_URL = os.environ["RUNTIME_BASE_URL"].rstrip("/")
 SERVICE_SECRET = os.environ["RUNTIME_SERVICE_AUTH_SECRET"].encode()
-WRITER = "phase14-external-check"
+WRITER = "phase14-external-" + secrets.token_hex(8)
 
 if not BASE_URL.startswith("https://"):
     raise SystemExit("RUNTIME_BASE_URL must use https://")
