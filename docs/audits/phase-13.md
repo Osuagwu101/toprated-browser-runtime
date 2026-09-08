@@ -2,7 +2,7 @@
 
 ## Phase anchor
 
-- Status: IN TEST
+- Status: TECHNICALLY GREEN / AWAITING OWNER APPROVAL
 - Blueprint: Master Blueprint v1.1
 - Verified baseline: `main` at `1e12108cbd812cbf8a78d8266adc03847190e804`
 - Last accepted phase: Phase 12
@@ -48,11 +48,11 @@ The corrected Phase 12 evidence measured a five-session browser-worker peak of 1
 | Operating system | Ubuntu 24.04 LTS, 64-bit |
 | Region | European Union |
 | Planned hostname | `browser-runtime-01` |
-| Magnitude of paid add-ons | None observed in the service record |
+| Paid add-ons | None observed in the service record |
 | Authentication | Initial owner-controlled administrative credentials issued; replace or harden with owner-controlled SSH key during Phase 14 |
-| Secret handling | No password, private key, recovery code, payment detail, or Contabo API credential recorded in the repository |
+| Secret handling | No password, private key, recovery code, payment detail, customer identifier, server address, or Contabo API credential recorded in the repository |
 
-The owner selected Cloud VPS 4 and monthly billing on 2026-09-08 after reviewing the Phase 12 measurements. The live checkout offered European Union rather than/preferentially over a Germany-specific option, and the owner selected the no-surcharge European Union region. This selection is not a Phase 18 safe-concurrency claim.
+The owner selected Cloud VPS 4 and monthly billing on 2026-09-08 after reviewing the Phase 12 measurements. The live checkout offered European Union rather than a Germany-specific option, and the owner selected the no-surcharge European Union region. This selection is not a Phase 18 safe-concurrency claim.
 
 ## Purchase and access evidence
 
@@ -66,7 +66,7 @@ Owner-only evidence supplied on 2026-09-08 established the following without pre
 - The VPS-control page displays the provisioned VPS and its active status indicator.
 - Contabo sent the `Ihre Logindaten!` server-access email.
 - The owner confirmed that its VPS credential row is populated with server address, administrative username, and password.
-- Sensitive credential values were deliberately not sent to the repository, chat transcript, or writers.
+- Sensitive credential values were deliberately not sent to the repository or writers.
 
 A direct TCP/SSH probe from the engineering workspace could not be performed because that workspace cannot route to arbitrary public IP addresses. This is an environment limitation, not a VPS failure. The first authenticated SSH connection and credential rotation/key hardening remain Phase 14 deployment actions.
 
@@ -78,11 +78,34 @@ A direct TCP/SSH probe from the engineering workspace could not be performed bec
 - [x] Public addressing and Ubuntu 24.04 verified.
 - [x] Administrative access material issued to the owner without exposing it.
 - [x] No secret value recorded in project evidence.
-- [ ] Inherited Phase 1–12 workflows pass on the exact final Phase 13 branch head.
+- [x] All inherited Phase 1–12 workflows passed on purchase-evidence head `3b7020e479ff4bddf902118899863addfb0a9f7d`.
+
+## Exact-head inherited regression evidence
+
+| Workflow | Run ID | Result |
+| --- | ---: | --- |
+| Verified Through Phase 3 | 34214919768 | SUCCESS |
+| Phase 4 Laravel Session API | 34214919885 | SUCCESS |
+| Phase 5 Session Isolation | 34214919751 | SUCCESS |
+| Phase 6 Lifecycle Management | 34214919883 | SUCCESS |
+| Phase 7 Generic Tool Profiles | 34214919822 | SUCCESS |
+| Phase 8 Phrasly Reference Implementation | 34214919773 | SUCCESS |
+| Phase 9 Authentication-Failure Behaviour | 34214919769 | SUCCESS |
+| Phase 10 Second-Tool Validation | 34214919824 | SUCCESS |
+| Phase 11 Security Hardening | 34214919753 | SUCCESS |
+| Phase 12 Performance Evidence | 34214919952 | SUCCESS |
+
+The closure-record commit produced by this update must also pass the inherited workflows. Its immutable run metadata remains attached to that exact commit in GitHub Actions and PR #15; no further evidence-only commit is required.
+
+## Gate assessment
+
+The blueprint Phase 13 exit gate, “VPS exists; access available for deployment,” is satisfied by the verified provider record, active VPS indicator, issued public addressing, Ubuntu 24.04 installation, and owner-held administrative access material. Phase 13 is technically green and awaits explicit owner approval after the closure-record head passes inherited validation.
+
+Known limitation carried to Phase 14: the first authenticated SSH connection cannot be tested from the current engineering workspace because direct arbitrary-IP routing is unavailable. Phase 14 must establish the live SSH session, rotate the initial credential, install an owner-controlled SSH key, and harden access before deployment.
 
 ## Evidence ledger
 
 - Initial selection head: `2be5dfcacbcaa8f39ab6a92d680970d240a4d058`.
-- Initial selection-head regression record: PR #15 records all inherited Phase 1–12 workflows as passed on that head.
+- Purchase-evidence head: `3b7020e479ff4bddf902118899863addfb0a9f7d`.
 - Owner-only purchase/provisioning evidence: verified from safely redacted Contabo service, VPS-control, inbox, and credential-table screenshots plus the owner's confirmation that the access row is populated.
-- Exact final-head inherited regression evidence: pending after this evidence update.
+- Exact purchase-evidence-head regressions: 10/10 completed successfully; run IDs recorded above.
