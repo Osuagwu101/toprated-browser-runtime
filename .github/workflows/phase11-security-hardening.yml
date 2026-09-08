@@ -3,6 +3,7 @@ name: Phase 11 Security Hardening
 on:
   push:
     branches:
+      - phase14-contabo-deployment
       - phase13-vps-selection
       - phase12-performance-testing
       - phase11-security-hardening
