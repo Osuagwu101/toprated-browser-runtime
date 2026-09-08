@@ -57,4 +57,4 @@ At the tested workload, browser-worker memory rose to approximately 0.36 GiB at 
 
 Session creation is intentionally serialized by `SessionManager::withCreationLock()` to protect global capacity and ownership invariants. The roughly linear concurrent-batch startup time is therefore an expected safety tradeoff, not proof of CPU saturation.
 
-Exact final-head regression results are pending after this evidence record is committed.
+An exact-head run of the Phase 12 gate and every inherited Phase 1–11 regression is required immediately before owner approval. The immutable workflow run links are recorded in the Phase 12 pull request.
