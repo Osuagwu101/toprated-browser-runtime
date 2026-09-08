@@ -42,6 +42,14 @@
 - Blueprint impact: repository validation alone cannot satisfy the external runtime gate.
 - Status: OPEN.
 
+### SB-014-005 — Initial readiness workflow referenced staging-only paths
+
+- Severity: MAJOR / CI blocker.
+- Evidence: run `34225639108`, job `102058965528`, failed in `Validate deployment files` because `phase14/scripts/bootstrap_ubuntu.sh` did not exist in the checkout.
+- Underlying cause: the first repository commit retained the local staging-directory prefix even though files were committed at repository-root `scripts/` and `deploy/` paths.
+- Corrective action: changed every workflow, bootstrap, and operator-document path to the exact committed repository path.
+- Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
+
 ## Verification required
 
 - Deployment bundle static/config validation.

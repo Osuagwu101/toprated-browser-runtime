@@ -48,9 +48,9 @@ EOF
   chmod 600 .env
 fi
 
-docker compose -f docker-compose.yml -f phase14/deploy/docker-compose.production.yml config --quiet
-docker compose -f docker-compose.yml -f phase14/deploy/docker-compose.production.yml build
-docker compose -f docker-compose.yml -f phase14/deploy/docker-compose.production.yml up -d
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml build
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml up -d
 
 ufw allow OpenSSH
 ufw allow 80/tcp
@@ -58,5 +58,5 @@ ufw allow 443/tcp
 ufw allow 443/udp
 ufw --force enable
 
-docker compose -f docker-compose.yml -f phase14/deploy/docker-compose.production.yml ps
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml ps
 echo "Deployment started. Wait for HTTPS provisioning, then run the external acceptance check from a different network."
