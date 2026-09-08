@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase11-security-hardening
+      - phase11-security-hardening-v2
       - phase10-multi-tool-one-click-auth
       - phase7-tool-profiles
       - phase8-phrasly-reference

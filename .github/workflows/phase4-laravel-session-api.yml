@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - phase11-security-hardening
+      - phase11-security-hardening-v2
       - phase10-multi-tool-one-click-auth
       - phase4-laravel-session-api
       - phase4-ci-baseline-fix
