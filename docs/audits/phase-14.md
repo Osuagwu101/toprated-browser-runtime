@@ -58,6 +58,14 @@
 - Corrective action: validate Compose JSON with exact `target`, `published`, and `host_ip` assertions for API, worker, and HTTPS ingress.
 - Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
 
+### SB-014-007 — Secret scanner treated the documented placeholder as a secret
+
+- Severity: MAJOR / CI blocker.
+- Evidence: run `34226248226`, job `102060981096`, passed syntax, Compose topology, and Caddy policy validation, then matched `.env.example`'s explicit `replace-with-...` service-secret placeholder.
+- Underlying cause: the scanner classified any long assignment as secret material without excluding the repository's required placeholder-only environment template.
+- Corrective action: exclude only `.env.example` and this workflow's synthetic test fixture while continuing to scan all other tracked files for private keys and long service-secret assignments.
+- Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
+
 ## Verification required
 
 - Deployment bundle static/config validation.

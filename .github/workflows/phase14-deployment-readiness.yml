@@ -61,4 +61,4 @@ jobs:
         run: |
           set -euo pipefail
           test ! -f .env
-          ! git grep -nE '(BEGIN (RSA |OPENSSH )?PRIVATE KEY|ssh-rsa [A-Za-z0-9+/]{100,}|RUNTIME_SERVICE_AUTH_SECRET=[A-Za-z0-9+/=_-]{32,})' -- ':!*.yml'
+          ! git grep -nE '(BEGIN (RSA |OPENSSH )?PRIVATE KEY|ssh-rsa [A-Za-z0-9+/]{100,}|RUNTIME_SERVICE_AUTH_SECRET=[A-Za-z0-9+/=_-]{32,})' -- ':!.env.example' ':!.github/workflows/phase14-deployment-readiness.yml'
