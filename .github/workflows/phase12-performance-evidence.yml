@@ -1,0 +1,140 @@
+name: Phase 12 Performance Evidence
+
+on:
+  push:
+    branches:
+      - phase12-performance-testing
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: phase12-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  RUNTIME_SERVICE_AUTH_SECRET: phase12-ci-service-auth-secret-not-for-production-0123456789abcdef
+  RUNTIME_OPERATOR_AUTH_SECRET: phase12-ci-operator-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: phase12-ci-worker-control-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  SERVICE_RATE_LIMIT_PER_MINUTE: 1000
+  OPERATOR_RATE_LIMIT_PER_MINUTE: 60
+  WORKER_CONTROL_RATE_LIMIT_PER_MINUTE: 1000
+  VIEWER_RATE_LIMIT_PER_MINUTE: 1000
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 5
+  SESSION_LEASE_SECONDS: 300
+  SESSION_IDLE_TIMEOUT_SECONDS: 240
+  SESSION_DISCONNECT_GRACE_SECONDS: 120
+  SESSION_STARTUP_GRACE_SECONDS: 30
+  BROWSER_DISPLAY_MODE: virtual-display
+
+jobs:
+  phase12-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository type and benchmark contract gate
+        run: |
+          set -euo pipefail
+          bash scripts/typecheck.sh
+          python3 -m py_compile tests/phase12-performance.py
+          node --check browser-worker/test/performance-fixture.mjs
+          grep -F "capacityClaim" tests/phase12-performance.py
+          grep -F "none-phase18-required" tests/phase12-performance.py
+
+      - name: Add CI-only generic workload profile
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('api/config/tool-profiles.json')
+          profiles = json.loads(path.read_text())
+          profiles['generic-phase12-performance'] = {
+              'enabled': True,
+              'launch_url': 'http://127.0.0.1:19094/?writer={writer_id}',
+          }
+          path.write_text(json.dumps(profiles, indent=2) + '\n')
+          PY
+
+      - name: Build runtime containers with retry
+        run: |
+          set -euo pipefail
+          delay=10
+          for attempt in 1 2 3; do
+            echo "compose_build_attempt=${attempt}/3"
+            if docker compose build; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
+
+      - name: Boot deterministic measurement runtime
+        run: |
+          set -euo pipefail
+          docker compose up -d browser-worker
+          docker compose exec -d browser-worker node test/performance-fixture.mjs
+          for i in $(seq 1 30); do
+            if docker compose exec -T browser-worker curl --fail --silent http://127.0.0.1:19094/health; then break; fi
+            if [ "$i" -eq 30 ]; then docker compose logs --no-color browser-worker; exit 1; fi
+            sleep 1
+          done
+          docker compose up -d api
+
+      - name: Wait for runtime readiness
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/phase12-api-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/phase12-worker-health.json; then
+              cat /tmp/phase12-api-health.json
+              cat /tmp/phase12-worker-health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --no-color
+          exit 1
+
+      - name: Collect sizing evidence at 1, 3, and 5 sessions
+        run: python3 tests/phase12-performance.py --levels 1,3,5 --repeats 2 --output artifacts/phase12-performance.json
+
+      - name: Publish human-readable job summary
+        if: always()
+        run: |
+          if [ ! -f artifacts/phase12-performance.json ]; then
+            echo '## Phase 12 performance evidence unavailable' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          data=json.load(open('artifacts/phase12-performance.json'))
+          print('## Phase 12 reproducible sizing baseline')
+          print('')
+          print(f"Runner: {data['environment']['logicalCpuCount']} logical CPUs, {data['environment']['memoryTotalBytes']/1024**3:.2f} GiB RAM")
+          print('')
+          print('| Sessions | Repeat | Batch startup ms | Startup p95 ms | Frame p95 ms | Input p95 ms | Cleanup ms |')
+          print('|---:|---:|---:|---:|---:|---:|---:|')
+          for run in data['runs']:
+              print(f"| {run['level']} | {run['repeat']} | {run['batchStartupMs']} | {run['startup']['p95Ms']} | {run['frame']['p95Ms']} | {run['input']['p95Ms']} | {run['cleanupBatchMs']} |")
+          print('')
+          print('This is CI sizing evidence, not a production safe-concurrency claim. Phase 18 owns that gate.')
+          PY
+
+      - name: Upload raw measurement evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase12-performance-evidence
+          path: artifacts/phase12-performance.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Tear down and verify cleanup
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"
