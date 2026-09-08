@@ -1,0 +1,63 @@
+name: Phase 14 Deployment Readiness
+
+on:
+  push:
+    branches:
+      - main
+      - phase14-contabo-deployment
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  phase14-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n phase14/scripts/bootstrap_ubuntu.sh
+          python3 -m py_compile phase14/scripts/external_acceptance.py
+          test -s phase14/deploy/Caddyfile
+          test -s phase14/deploy/docker-compose.production.yml
+
+      - name: Validate production Compose merge
+        env:
+          APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          WORKER_CONTROL_SECRET: phase14-worker-control-secret-000000000000000000000000
+          RUNTIME_SERVICE_AUTH_SECRET: phase14-service-auth-secret-00000000000000000000000000
+          RUNTIME_OPERATOR_AUTH_SECRET: phase14-operator-auth-secret-000000000000000000000000
+          VIEWER_SIGNING_SECRET: phase14-viewer-signing-secret-0000000000000000000000000
+          RUNTIME_DOMAIN: runtime.example.test
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f phase14/deploy/docker-compose.production.yml config --quiet
+          rendered="$(docker compose -f docker-compose.yml -f phase14/deploy/docker-compose.production.yml config)"
+          grep -q '127.0.0.1:18080' <<<"${rendered}"
+          grep -q '127.0.0.1:18081' <<<"${rendered}"
+          ! grep -q '0.0.0.0:1808[01]' <<<"${rendered}"
+
+      - name: Validate Caddy ingress policy
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e RUNTIME_DOMAIN=runtime.example.test \
+            -v "${PWD}/phase14/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine caddy validate --config /etc/caddy/Caddyfile
+          grep -q '/viewer/\*' phase14/deploy/Caddyfile
+          grep -q '/api/health' phase14/deploy/Caddyfile
+          ! grep -q 'reverse_proxy.*browser.*/browser' phase14/deploy/Caddyfile
+
+      - name: Reject committed secret material
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -f .env
+          ! git grep -nE '(BEGIN (RSA |OPENSSH )?PRIVATE KEY|ssh-rsa [A-Za-z0-9+/]{100,}|RUNTIME_SERVICE_AUTH_SECRET=[A-Za-z0-9+/=_-]{32,})' -- ':!*.yml'
