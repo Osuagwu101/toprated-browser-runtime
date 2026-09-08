@@ -1,0 +1,472 @@
+{
+  "schemaVersion": 1,
+  "phase": 12,
+  "result": "PASS",
+  "scope": "reproducible-ci-sizing-baseline",
+  "capacityClaim": "none-phase18-required",
+  "environment": {
+    "os": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "architecture": "x86_64",
+    "logicalCpuCount": 4,
+    "memoryTotalBytes": 16766410752,
+    "dockerVersion": "28.0.4"
+  },
+  "configuredMaxSessions": 5,
+  "baselineResources": {
+    "toprated-browser-runtime-api-1": {
+      "cpuPercent": 0.02,
+      "memoryBytes": 63375933,
+      "pids": 3
+    },
+    "toprated-browser-runtime-browser-worker-1": {
+      "cpuPercent": 6.22,
+      "memoryBytes": 26665287,
+      "pids": 15
+    }
+  },
+  "runs": [
+    {
+      "level": 1,
+      "repeat": 1,
+      "batchStartupMs": 728.61,
+      "startup": {
+        "count": 1,
+        "minMs": 726.66,
+        "p50Ms": 726.66,
+        "p95Ms": 726.66,
+        "maxMs": 726.66
+      },
+      "status": {
+        "count": 3,
+        "minMs": 1.86,
+        "p50Ms": 1.88,
+        "p95Ms": 3.84,
+        "maxMs": 3.84
+      },
+      "frame": {
+        "count": 3,
+        "minMs": 43.28,
+        "p50Ms": 49.05,
+        "p95Ms": 52.73,
+        "maxMs": 52.73
+      },
+      "input": {
+        "count": 3,
+        "minMs": 63.58,
+        "p50Ms": 64.3,
+        "p95Ms": 65.61,
+        "maxMs": 65.61
+      },
+      "frameBytesMedian": 129426,
+      "cleanupBatchMs": 292.06,
+      "cleanupRequest": {
+        "count": 1,
+        "minMs": 291.56,
+        "p50Ms": 291.56,
+        "p95Ms": 291.56,
+        "maxMs": 291.56
+      },
+      "resourceSamples": [
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62757273,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 47.37,
+            "memoryBytes": 364799590,
+            "pids": 117
+          }
+        },
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62757273,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 5.61,
+            "memoryBytes": 378535936,
+            "pids": 118
+          }
+        }
+      ],
+      "cleanupResidue": {
+        "chromiumPids": [],
+        "profiles": [],
+        "openDatabaseSessions": 0
+      }
+    },
+    {
+      "level": 1,
+      "repeat": 2,
+      "batchStartupMs": 701.83,
+      "startup": {
+        "count": 1,
+        "minMs": 701.3,
+        "p50Ms": 701.3,
+        "p95Ms": 701.3,
+        "maxMs": 701.3
+      },
+      "status": {
+        "count": 3,
+        "minMs": 1.6,
+        "p50Ms": 1.69,
+        "p95Ms": 2.65,
+        "maxMs": 2.65
+      },
+      "frame": {
+        "count": 3,
+        "minMs": 44.49,
+        "p50Ms": 50.41,
+        "p95Ms": 51.31,
+        "maxMs": 51.31
+      },
+      "input": {
+        "count": 3,
+        "minMs": 64.02,
+        "p50Ms": 64.31,
+        "p95Ms": 65.11,
+        "maxMs": 65.11
+      },
+      "frameBytesMedian": 129426,
+      "cleanupBatchMs": 290.05,
+      "cleanupRequest": {
+        "count": 1,
+        "minMs": 289.56,
+        "p50Ms": 289.56,
+        "p95Ms": 289.56,
+        "maxMs": 289.56
+      },
+      "resourceSamples": [
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 4.37,
+            "memoryBytes": 62851645,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 51.99,
+            "memoryBytes": 365953024,
+            "pids": 113
+          }
+        },
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62778245,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 2.18,
+            "memoryBytes": 378431078,
+            "pids": 114
+          }
+        }
+      ],
+      "cleanupResidue": {
+        "chromiumPids": [],
+        "profiles": [],
+        "openDatabaseSessions": 0
+      }
+    },
+    {
+      "level": 3,
+      "repeat": 1,
+      "batchStartupMs": 2550.25,
+      "startup": {
+        "count": 3,
+        "minMs": 729.54,
+        "p50Ms": 1670.92,
+        "p95Ms": 2548.92,
+        "maxMs": 2548.92
+      },
+      "status": {
+        "count": 9,
+        "minMs": 1.46,
+        "p50Ms": 1.94,
+        "p95Ms": 4.42,
+        "maxMs": 4.42
+      },
+      "frame": {
+        "count": 9,
+        "minMs": 51.53,
+        "p50Ms": 60.38,
+        "p95Ms": 70.28,
+        "maxMs": 70.28
+      },
+      "input": {
+        "count": 9,
+        "minMs": 63.39,
+        "p50Ms": 65.73,
+        "p95Ms": 69.47,
+        "maxMs": 69.47
+      },
+      "frameBytesMedian": 129426,
+      "cleanupBatchMs": 867.7,
+      "cleanupRequest": {
+        "count": 3,
+        "minMs": 291.72,
+        "p50Ms": 582.15,
+        "p95Ms": 866.58,
+        "maxMs": 866.58
+      },
+      "resourceSamples": [
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.01,
+            "memoryBytes": 62641930,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 67.3,
+            "memoryBytes": 1056964608,
+            "pids": 306
+          }
+        },
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62788730,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 5.84,
+            "memoryBytes": 1074815565,
+            "pids": 309
+          }
+        }
+      ],
+      "cleanupResidue": {
+        "chromiumPids": [],
+        "profiles": [],
+        "openDatabaseSessions": 0
+      }
+    },
+    {
+      "level": 3,
+      "repeat": 2,
+      "batchStartupMs": 2472.86,
+      "startup": {
+        "count": 3,
+        "minMs": 718.82,
+        "p50Ms": 1604.98,
+        "p95Ms": 2471.56,
+        "maxMs": 2471.56
+      },
+      "status": {
+        "count": 9,
+        "minMs": 2.49,
+        "p50Ms": 3.14,
+        "p95Ms": 4.1,
+        "maxMs": 4.1
+      },
+      "frame": {
+        "count": 9,
+        "minMs": 60.64,
+        "p50Ms": 64.53,
+        "p95Ms": 70.83,
+        "maxMs": 70.83
+      },
+      "input": {
+        "count": 9,
+        "minMs": 64.44,
+        "p50Ms": 65.72,
+        "p95Ms": 68.78,
+        "maxMs": 68.78
+      },
+      "frameBytesMedian": 129426,
+      "cleanupBatchMs": 859.6,
+      "cleanupRequest": {
+        "count": 3,
+        "minMs": 295.76,
+        "p50Ms": 578.55,
+        "p95Ms": 858.74,
+        "maxMs": 858.74
+      },
+      "resourceSamples": [
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62893588,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 73.13,
+            "memoryBytes": 1074815565,
+            "pids": 310
+          }
+        },
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62589501,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 5.63,
+            "memoryBytes": 1098437885,
+            "pids": 313
+          }
+        }
+      ],
+      "cleanupResidue": {
+        "chromiumPids": [],
+        "profiles": [],
+        "openDatabaseSessions": 0
+      }
+    },
+    {
+      "level": 5,
+      "repeat": 1,
+      "batchStartupMs": 4347.65,
+      "startup": {
+        "count": 5,
+        "minMs": 676.86,
+        "p50Ms": 2513.5,
+        "p95Ms": 4344.74,
+        "maxMs": 4344.74
+      },
+      "status": {
+        "count": 15,
+        "minMs": 1.65,
+        "p50Ms": 4.11,
+        "p95Ms": 6.44,
+        "maxMs": 6.44
+      },
+      "frame": {
+        "count": 15,
+        "minMs": 68.0,
+        "p50Ms": 79.39,
+        "p95Ms": 101.64,
+        "maxMs": 101.64
+      },
+      "input": {
+        "count": 15,
+        "minMs": 64.04,
+        "p50Ms": 68.85,
+        "p95Ms": 74.66,
+        "maxMs": 74.66
+      },
+      "frameBytesMedian": 129426,
+      "cleanupBatchMs": 1461.24,
+      "cleanupRequest": {
+        "count": 5,
+        "minMs": 300.44,
+        "p50Ms": 888.68,
+        "p95Ms": 1458.82,
+        "maxMs": 1458.82
+      },
+      "resourceSamples": [
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62547558,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 56.28,
+            "memoryBytes": 1726576852,
+            "pids": 499
+          }
+        },
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.02,
+            "memoryBytes": 62820188,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 8.82,
+            "memoryBytes": 1766305300,
+            "pids": 504
+          }
+        }
+      ],
+      "cleanupResidue": {
+        "chromiumPids": [],
+        "profiles": [],
+        "openDatabaseSessions": 0
+      }
+    },
+    {
+      "level": 5,
+      "repeat": 2,
+      "batchStartupMs": 4400.57,
+      "startup": {
+        "count": 5,
+        "minMs": 695.41,
+        "p50Ms": 2508.94,
+        "p95Ms": 4398.37,
+        "maxMs": 4398.37
+      },
+      "status": {
+        "count": 15,
+        "minMs": 1.65,
+        "p50Ms": 4.16,
+        "p95Ms": 9.29,
+        "maxMs": 9.29
+      },
+      "frame": {
+        "count": 15,
+        "minMs": 65.09,
+        "p50Ms": 80.95,
+        "p95Ms": 107.48,
+        "maxMs": 107.48
+      },
+      "input": {
+        "count": 15,
+        "minMs": 64.44,
+        "p50Ms": 68.48,
+        "p95Ms": 76.73,
+        "maxMs": 76.73
+      },
+      "frameBytesMedian": 129426,
+      "cleanupBatchMs": 1462.28,
+      "cleanupRequest": {
+        "count": 5,
+        "minMs": 301.07,
+        "p50Ms": 883.9,
+        "p95Ms": 1460.16,
+        "maxMs": 1460.16
+      },
+      "resourceSamples": [
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 4.52,
+            "memoryBytes": 62925045,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 15.37,
+            "memoryBytes": 1753420398,
+            "pids": 506
+          }
+        },
+        {
+          "toprated-browser-runtime-api-1": {
+            "cpuPercent": 0.01,
+            "memoryBytes": 62683873,
+            "pids": 3
+          },
+          "toprated-browser-runtime-browser-worker-1": {
+            "cpuPercent": 8.57,
+            "memoryBytes": 1770600267,
+            "pids": 511
+          }
+        }
+      ],
+      "cleanupResidue": {
+        "chromiumPids": [],
+        "profiles": [],
+        "openDatabaseSessions": 0
+      }
+    }
+  ],
+  "finalResidue": {
+    "chromiumPids": [],
+    "profiles": [],
+    "openDatabaseSessions": 0
+  }
+}

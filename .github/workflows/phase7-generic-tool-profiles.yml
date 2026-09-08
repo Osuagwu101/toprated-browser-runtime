@@ -3,6 +3,7 @@ name: Phase 7 Generic Tool Profiles
 on:
   push:
     branches:
+      - phase12-performance-testing
       - phase11-security-hardening
       - phase11-security-hardening-v2
       - phase10-multi-tool-one-click-auth
