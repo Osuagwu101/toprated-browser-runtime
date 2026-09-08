@@ -50,6 +50,14 @@
 - Corrective action: changed every workflow, bootstrap, and operator-document path to the exact committed repository path.
 - Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
 
+### SB-014-006 — Compose isolation assertion depended on display formatting
+
+- Severity: MAJOR / CI blocker.
+- Evidence: run `34225926344`, job `102059914824`, passed file validation and `docker compose ... config --quiet`, then failed the compact-string port grep in `Validate production Compose merge`.
+- Underlying cause: current Docker Compose renders published ports as structured YAML fields rather than the compact `127.0.0.1:18080` string assumed by the test.
+- Corrective action: validate Compose JSON with exact `target`, `published`, and `host_ip` assertions for API, worker, and HTTPS ingress.
+- Status: FIX IMPLEMENTED, UNVERIFIED pending corrected run.
+
 ## Verification required
 
 - Deployment bundle static/config validation.

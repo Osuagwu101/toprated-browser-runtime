@@ -39,10 +39,11 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet
-          rendered="$(docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config)"
-          grep -q '127.0.0.1:18080' <<<"${rendered}"
-          grep -q '127.0.0.1:18081' <<<"${rendered}"
-          ! grep -q '0.0.0.0:1808[01]' <<<"${rendered}"
+          rendered="$(docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --format json)"
+          jq -e '.services.api.ports[] | select(.target == 8080 and .published == "18080" and .host_ip == "127.0.0.1")' <<<"${rendered}"
+          jq -e '.services."browser-worker".ports[] | select(.target == 8081 and .published == "18081" and .host_ip == "127.0.0.1")' <<<"${rendered}"
+          jq -e '.services.ingress.ports[] | select(.target == 443 and .published == "443")' <<<"${rendered}"
+          ! jq -e '[.services.api.ports[], .services."browser-worker".ports[]] | any(.host_ip != "127.0.0.1")' <<<"${rendered}"
 
       - name: Validate Caddy ingress policy
         run: |
