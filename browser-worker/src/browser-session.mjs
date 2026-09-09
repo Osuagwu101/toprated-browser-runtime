@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { filterAuthorizedCookies, installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
+import { AdminProfileStore } from './admin-profile-store.mjs';
 
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
@@ -124,13 +125,14 @@ function killProcessGroup(groupId, signal) { try { process.kill(-groupId, signal
 async function waitForExit(processRef, timeoutMs) { if (processRef.exitCode !== null || processRef.signalCode !== null) return true; return new Promise((resolve) => { const timer = setTimeout(() => resolve(false), timeoutMs); processRef.once('exit', () => { clearTimeout(timer); resolve(true); }); }); }
 
 export class BrowserSessionController {
-  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
+  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000, adminProfileStore = null } = {}) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SUPPORTED_BROWSER_SESSIONS) throw new Error(`MAX_BROWSER_SESSIONS must be an integer between 1 and ${MAX_SUPPORTED_BROWSER_SESSIONS}.`);
     this.executablePath = executablePath;
     this.maxSessions = maxSessions;
     this.displayMode = normalizeBrowserDisplayMode(displayMode);
     this.xvfbRunPath = xvfbRunPath;
     this.navigationTimeoutMs = normalizeBrowserNavigationTimeoutMs(navigationTimeoutMs);
+    this.adminProfileStore = adminProfileStore || new AdminProfileStore();
     this.sessions = new Map();
     this.startingCount = 0;
   }
@@ -158,6 +160,7 @@ export class BrowserSessionController {
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       viewer: 'restricted',
       displayMode: this.displayMode,
+      sessionKind: session.sessionKind,
       authentication: { required: session.authenticationRequired === true, verified: session.authenticationVerified === true },
     };
   }
@@ -182,15 +185,36 @@ export class BrowserSessionController {
     if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
     if (!existsSync(this.executablePath)) throw new Error(`Chromium executable not found: ${this.executablePath}`);
     if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
-    this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
-    const userDataDir = mkdtempSync(join(tmpdir(), 'toprated-browser-'));
+    const sessionKind = String(options?.sessionKind || 'writer');
+    if (!['writer', 'proof', 'admin_auth'].includes(sessionKind)) throw Object.assign(new Error('Browser session kind is invalid.'), { statusCode: 422, code: 'BROWSER_SESSION_KIND_INVALID' });
+    if (sessionKind !== 'admin_auth' && options?.adminProfileToolSlug) throw Object.assign(new Error('Persistent administrator profiles are operator-only.'), { statusCode: 403, code: 'ADMIN_PROFILE_FORBIDDEN' });
+    const provisionalOwnerId = randomUUID();
+    const persistentProfile = sessionKind === 'admin_auth'
+      ? this.adminProfileStore.acquire(options?.adminProfileToolSlug, provisionalOwnerId)
+      : null;
+    let userDataDir;
+    try {
+      userDataDir = persistentProfile?.userDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
+    } catch (error) {
+      if (persistentProfile) this.adminProfileStore.release(persistentProfile.profileId, provisionalOwnerId);
+      throw error;
+    }
+    this.startingCount += 1;
     const chromiumArgs = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'];
     const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
     const launcherArgs = this.displayMode === 'virtual-display'
       ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
       : ['--headless=new', ...chromiumArgs];
-    const browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    let browserProcess;
+    try {
+      browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    } catch (error) {
+      if (persistentProfile) this.adminProfileStore.release(persistentProfile.profileId, provisionalOwnerId);
+      else rmSync(userDataDir, { recursive: true, force: true });
+      this.startingCount -= 1;
+      throw error;
+    }
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
     let failureStage = 'cdp-port';
@@ -207,6 +231,10 @@ export class BrowserSessionController {
         sessionId,
         process: browserProcess,
         userDataDir,
+        deleteUserDataDirOnStop: persistentProfile === null,
+        adminProfileId: persistentProfile?.profileId || null,
+        adminProfileOwnerId: persistentProfile ? provisionalOwnerId : null,
+        sessionKind,
         port,
         cdp,
         url: 'about:blank',
@@ -227,14 +255,21 @@ export class BrowserSessionController {
         await removeBrowserStateBootstrap(cdp, bootstrap.scriptIdentifier);
       }
       failureStage = 'authentication';
-      const authentication = await verifyAuthentication(cdp, options?.authentication || {});
+      const authentication = options?.deferAuthentication === true && sessionKind === 'admin_auth'
+        ? { required: options?.authentication?.required === true, verified: false }
+        : await verifyAuthentication(cdp, options?.authentication || {});
       const session = this.assertSession(sessionId);
       session.authenticationRequired = authentication.required === true;
       session.authenticationVerified = authentication.verified === true;
       return this.getStatus(sessionId);
     } catch (error) {
       if (sessionId && this.sessions.has(sessionId)) { try { await this.stop(sessionId); } catch {} }
-      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); rmSync(userDataDir, { recursive: true, force: true }); }
+      else {
+        if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} }
+        await waitForExit(browserProcess, 2000);
+        if (persistentProfile) this.adminProfileStore.release(persistentProfile.profileId, provisionalOwnerId);
+        else rmSync(userDataDir, { recursive: true, force: true });
+      }
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
@@ -348,7 +383,8 @@ export class BrowserSessionController {
     if (orphanPids.length) { killProcessGroup(rootPid, 'SIGKILL'); for (const pid of orphanPids) { try { process.kill(pid, 'SIGKILL'); } catch {} } await sleep(250); }
     groupPids = collectProcessGroup(rootPid); orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
     const zombiePids = orphanPids.filter((pid) => readProcessState(pid) === 'Z');
-    rmSync(session.userDataDir, { recursive: true, force: true });
+    if (session.deleteUserDataDirOnStop) rmSync(session.userDataDir, { recursive: true, force: true });
+    else if (rootExited && orphanPids.length === 0 && zombiePids.length === 0) this.adminProfileStore.release(session.adminProfileId, session.adminProfileOwnerId);
     return { rootExited, orphanPids, zombiePids };
   }
   async stop(sessionId) { const id = String(sessionId || ''); const session = this.sessions.get(id); if (!session) return { active: false, phase: RUNTIME_PHASE, sessionId: id || null, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } }; this.sessions.delete(id); const pid = session.process.pid; const cleanup = await this.cleanupSession(session); return { active: false, phase: RUNTIME_PHASE, sessionId: id, pid, cleanup }; }

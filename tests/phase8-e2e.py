@@ -11,6 +11,7 @@ API = os.environ.get('API_BASE', 'http://127.0.0.1:18080')
 WORKER = os.environ.get('WORKER_BASE', 'http://127.0.0.1:18081')
 SERVICE_SECRET = os.environ['RUNTIME_SERVICE_AUTH_SECRET'].encode()
 WORKER_SECRET = os.environ['WORKER_CONTROL_SECRET']
+OPERATOR_SECRET = os.environ['RUNTIME_OPERATOR_AUTH_SECRET']
 
 
 def signed(method, path, writer, obj=None):
@@ -44,6 +45,19 @@ def worker_json(path, authenticated=True):
     if authenticated:
         headers['x-toprated-worker-secret'] = WORKER_SECRET
     req = request.Request(WORKER + path, headers=headers, method='GET')
+    try:
+        with request.urlopen(req, timeout=20) as response:
+            return response.status, json.loads(response.read() or b'{}')
+    except error.HTTPError as exc:
+        return exc.code, json.loads(exc.read() or b'{}')
+
+
+def operator(method, path):
+    req = request.Request(
+        API + path,
+        headers={'accept': 'application/json', 'x-toprated-operator-secret': OPERATOR_SECRET},
+        method=method,
+    )
     try:
         with request.urlopen(req, timeout=20) as response:
             return response.status, json.loads(response.read() or b'{}')
@@ -107,7 +121,7 @@ code, missing = signed('POST', '/api/sessions', writer, {
     'writer_id': writer,
     'tool_slug': 'generic-phase8-state',
 })
-assert code == 422 and missing['code'] == 'BROWSER_STATE_REQUIRED', (code, missing)
+assert code == 423 and missing['code'] == 'TOOL_REAUTH_REQUIRED', (code, missing)
 
 # State is constrained to the configured tool hosts.
 bad_state = good_state()
@@ -129,6 +143,11 @@ code, headers_rejected = signed('POST', '/api/sessions', writer, {
 })
 assert code == 422 and headers_rejected['code'] == 'BROWSER_STATE_INVALID', (code, headers_rejected)
 assert 'should-not-cross' not in json.dumps(headers_rejected), headers_rejected
+
+# The legacy direct-state regression remains service-authenticated. Clear the
+# expected admin latch before proving that lower-level state transport still works.
+code, restored = operator('POST', '/api/operator/tool-auth/generic-phase8-state/restore')
+assert code == 200 and restored['status'] == 'ready', (code, restored)
 
 # Correct cookies + localStorage + sessionStorage are injected before navigation,
 # and the configured authentication indicators must pass before a viewer grant exists.

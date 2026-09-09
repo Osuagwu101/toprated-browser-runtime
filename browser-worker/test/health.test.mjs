@@ -19,6 +19,8 @@ test('health payload remains generic and reflects Phase 6 Laravel lifecycle owne
   assert.equal(payload.capacity.maxSupportedSessions, 15);
   assert.equal(payload.capacity.configurationValid, true);
   assert.equal(payload.chromium.installed, true);
+  assert.equal(payload.adminProfiles.persistence, 'durable-operator-only');
+  assert.equal(payload.adminProfiles.activeCount, 0);
   assert.equal(JSON.stringify(payload).toLowerCase().includes('phrasly'), false);
 });
 

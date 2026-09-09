@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { MAX_SUPPORTED_BROWSER_SESSIONS, RUNTIME_PHASE } from './browser-session.mjs';
 
-export function buildHealthPayload(env = process.env) {
+export function buildHealthPayload(env = process.env, adminProfiles = null) {
   const browserExecutable = env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium';
   const maxSessions = Number(env.MAX_BROWSER_SESSIONS || 3);
   const capacityConfigured = Number.isInteger(maxSessions) && maxSessions >= 1 && maxSessions <= MAX_SUPPORTED_BROWSER_SESSIONS;
@@ -28,6 +28,11 @@ export function buildHealthPayload(env = process.env) {
     chromium: {
       executable: browserExecutable,
       installed: chromiumInstalled,
+    },
+    adminProfiles: adminProfiles || {
+      persistence: 'durable-operator-only',
+      activeCount: 0,
+      persistedCount: 0,
     },
   };
 }

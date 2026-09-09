@@ -2,7 +2,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController, RUNTIME_PHASE } from './browser-session.mjs';
-import { checkAuthentication, normalizeAuthenticationPolicy } from './browser-state.mjs';
+import { checkAuthentication, normalizeAuthenticationPolicy, verifyAuthentication } from './browser-state.mjs';
 import { readBearerToken, resolveViewerSecret, verifyViewerToken } from './viewer-auth.mjs';
 import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './rate-limit.mjs';
 import { assertAllowedFields, assertNoQuery, readJson } from './request-security.mjs';
@@ -61,6 +61,7 @@ function writeJson(response, statusCode, payload, extraHeaders = {}) { response.
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', 'content-security-policy': `default-src 'none'; img-src 'self' blob: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`, 'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()', 'cross-origin-opener-policy': 'same-origin', 'cross-origin-resource-policy': 'same-origin', 'x-frame-options': 'DENY' })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
 function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
+function matchAdminSessionRoute(pathname) { const match = pathname.match(/^\/browser\/admin-sessions(?:\/([0-9a-f-]{36})(?:\/(approve))?)?$/i); return match ? { sessionId: match[1] || null, action: match[2] || (match[1] ? 'status' : 'collection') } : null; }
 function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
@@ -76,7 +77,7 @@ function assertSessionCreateBody(body) {
 }
 async function refreshLiveToolAuthentication(sessionId) {
   const session = controller.assertSession(sessionId);
-  const policy = sessionAuthenticationPolicies.get(sessionId);
+  const policy = sessionAuthenticationPolicies.get(sessionId)?.authentication;
   if (!policy || policy.required !== true) return { required: false, verified: true };
   const authentication = await checkAuthentication(session.cdp, policy);
   session.authenticationRequired = authentication.required === true;
@@ -84,6 +85,8 @@ async function refreshLiveToolAuthentication(sessionId) {
   return authentication;
 }
 async function assertViewerToolAuthentication(sessionId) {
+  const entry = sessionAuthenticationPolicies.get(sessionId);
+  if (entry?.viewerAuthenticationGate === false) return;
   const authentication = await refreshLiveToolAuthentication(sessionId);
   if (authentication.required === true && authentication.verified !== true) {
     throw Object.assign(
@@ -100,7 +103,7 @@ async function stopSession(sessionId) {
 const server = http.createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url || '/', 'http://browser-worker.local');
-    if (request.method === 'GET' && requestUrl.pathname === '/health') return writeJson(response, 200, buildHealthPayload());
+    if (request.method === 'GET' && requestUrl.pathname === '/health') return writeJson(response, 200, buildHealthPayload(process.env, controller.adminProfileStore.summary()));
 
     pruneSessionAuthenticationPolicies();
     const clientAddress = String(request.socket.remoteAddress || 'unknown');
@@ -132,11 +135,60 @@ const server = http.createServer(async (request, response) => {
           browserStatePolicy: body.browserStatePolicy,
           authentication: authenticationPolicy,
         });
-        sessionAuthenticationPolicies.set(created.sessionId, authenticationPolicy);
+        sessionAuthenticationPolicies.set(created.sessionId, { authentication: authenticationPolicy, viewerAuthenticationGate: true });
         writeJson(response, 201, created);
         return;
       } finally {
         endSessionCreate();
+      }
+    }
+    const adminSessionRoute = matchAdminSessionRoute(requestUrl.pathname);
+    if (adminSessionRoute) {
+      if (request.method === 'POST' && adminSessionRoute.action === 'collection') {
+        const body = await readJson(request, sessionCreateMaxBytes);
+        assertAllowedFields(body, ['toolSlug', 'url', 'browserStatePolicy', 'authentication'], 'Administrator browser session request contains unsupported fields.');
+        const toolSlug = String(body.toolSlug || '');
+        if (!/^[A-Za-z0-9._-]{1,191}$/.test(toolSlug)) throw Object.assign(new Error('Administrator profile tool slug is invalid.'), { statusCode: 422, code: 'ADMIN_PROFILE_INVALID' });
+        const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+        if (authenticationPolicy.required !== true) throw Object.assign(new Error('Administrator profiles require an authentication policy.'), { statusCode: 422, code: 'AUTHENTICATION_POLICY_INVALID' });
+        const browserStatePolicy = { ...(body.browserStatePolicy || {}), required: false };
+        beginSessionCreate();
+        try {
+          const created = await controller.start(body.url, {
+            browserStatePolicy,
+            authentication: authenticationPolicy,
+            sessionKind: 'admin_auth',
+            adminProfileToolSlug: toolSlug,
+            deferAuthentication: true,
+          });
+          sessionAuthenticationPolicies.set(created.sessionId, { authentication: authenticationPolicy, viewerAuthenticationGate: false });
+          return writeJson(response, 201, created);
+        } finally {
+          endSessionCreate();
+        }
+      }
+      if (!adminSessionRoute.sessionId) throw Object.assign(new Error('Administrator browser session identity is required.'), { statusCode: 404 });
+      const session = controller.assertSession(adminSessionRoute.sessionId);
+      if (session.sessionKind !== 'admin_auth') throw Object.assign(new Error('Browser session is not an administrator authentication session.'), { statusCode: 403, code: 'ADMIN_PROFILE_FORBIDDEN' });
+      if (request.method === 'GET' && adminSessionRoute.action === 'status') {
+        const entry = sessionAuthenticationPolicies.get(adminSessionRoute.sessionId);
+        const authentication = await checkAuthentication(session.cdp, entry?.authentication || {});
+        session.authenticationRequired = authentication.required === true;
+        session.authenticationVerified = authentication.verified === true;
+        return writeJson(response, 200, controller.getStatus(adminSessionRoute.sessionId));
+      }
+      if (request.method === 'POST' && adminSessionRoute.action === 'approve') {
+        const body = await readJson(request);
+        assertAllowedFields(body, [], 'Administrator profile approval accepts no request fields.');
+        const entry = sessionAuthenticationPolicies.get(adminSessionRoute.sessionId);
+        const authentication = await verifyAuthentication(session.cdp, entry?.authentication || {});
+        session.authenticationRequired = true;
+        session.authenticationVerified = authentication.verified === true;
+        return writeJson(response, 200, {
+          sessionId: adminSessionRoute.sessionId,
+          authentication,
+          authorizedState: await controller.exportAuthorizedState(adminSessionRoute.sessionId),
+        });
       }
     }
     const browserSessionRoute = matchBrowserSessionRoute(requestUrl.pathname);
@@ -185,12 +237,12 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
     const statusCode = Number(error?.statusCode || 500);
-    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
+    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'BROWSER_SESSION_KIND_INVALID', 'ADMIN_PROFILE_INVALID', 'ADMIN_PROFILE_IN_USE', 'ADMIN_PROFILE_FORBIDDEN', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
     const extraHeaders = statusCode === 429 && error?.retryAfterSeconds ? { 'retry-after': String(error.retryAfterSeconds) } : {};
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }, extraHeaders);
   }
 });
-server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' })));
+server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'encrypted-approved-state-plus-ephemeral-writer', adminProfiles: 'durable-operator-only' })));
 let shuttingDown = false;
 async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));

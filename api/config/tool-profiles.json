@@ -33,6 +33,10 @@
         "[data-phase8-authenticated=\"true\"]"
       ],
       "timeout_seconds": 5
+    },
+    "admin_profile": {
+      "enabled": true,
+      "launch_url": "http://127.0.0.1:19091/login"
     }
   },
   "phrasly": {
@@ -50,10 +54,15 @@
         "/dashboard"
       ],
       "timeout_seconds": 15
+    },
+    "admin_profile": {
+      "enabled": true,
+      "launch_url": "https://phrasly.ai/login"
     }
   },
   "phrasly-admin-bootstrap": {
     "enabled": true,
+    "audience": "operator",
     "launch_url": "https://phrasly.ai/login",
     "browser_state": {
       "required": false,
@@ -95,6 +104,10 @@
         "/dashboard"
       ],
       "timeout_seconds": 15
+    },
+    "admin_profile": {
+      "enabled": true,
+      "launch_url": "https://stealthwriter.ai/dashboard"
     }
   },
   "chatgpt": {
@@ -115,6 +128,10 @@
         "div[aria-label=\"Open profile menu\"]"
       ],
       "timeout_seconds": 20
+    },
+    "admin_profile": {
+      "enabled": true,
+      "launch_url": "https://chatgpt.com/"
     }
   },
   "generic-disabled": {
@@ -123,6 +140,7 @@
   },
   "chatgpt-admin-bootstrap": {
     "enabled": true,
+    "audience": "operator",
     "launch_url": "https://chatgpt.com/",
     "browser_state": {
       "required": false,
@@ -138,6 +156,7 @@
   },
   "stealthwriter-admin-bootstrap": {
     "enabled": true,
+    "audience": "operator",
     "launch_url": "https://stealthwriter.ai/dashboard",
     "browser_state": {
       "required": false,

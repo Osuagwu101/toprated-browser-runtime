@@ -90,9 +90,11 @@ jobs:
 
           stealth['launch_url'] = 'http://127.0.0.1:19093/stealthwriter/dashboard'
           stealth['browser_state']['allowed_hosts'] = ['127.0.0.1']
+          stealth['admin_profile']['launch_url'] = 'http://127.0.0.1:19093/stealthwriter/dashboard'
 
           chatgpt['launch_url'] = 'http://127.0.0.1:19093/chatgpt/'
           chatgpt['browser_state']['allowed_hosts'] = ['127.0.0.1']
+          chatgpt['admin_profile']['launch_url'] = 'http://127.0.0.1:19093/chatgpt/'
 
           # Clone the same policies under deliberately non-vendor slugs. Running the
           # full E2E against these names proves behavior is profile-driven, not keyed
@@ -140,9 +142,11 @@ jobs:
           assert ci['sneakwrite']['launch_url'] == 'http://127.0.0.1:19092/app'
           assert ci['stealthwriter']['launch_url'] == 'http://127.0.0.1:19093/stealthwriter/dashboard'
           assert ci['stealthwriter']['browser_state']['allowed_hosts'] == ['127.0.0.1']
+          assert ci['stealthwriter']['admin_profile']['launch_url'] == 'http://127.0.0.1:19093/stealthwriter/dashboard'
           assert ci['stealthwriter']['authentication'] == profiles['stealthwriter']['authentication']
           assert ci['chatgpt']['launch_url'] == 'http://127.0.0.1:19093/chatgpt/'
           assert ci['chatgpt']['browser_state']['allowed_hosts'] == ['127.0.0.1']
+          assert ci['chatgpt']['admin_profile']['launch_url'] == 'http://127.0.0.1:19093/chatgpt/'
           assert ci['chatgpt']['authentication'] == profiles['chatgpt']['authentication']
           assert ci['phrasly'] == profiles['phrasly']
           print('phase10_profile_contract=pass')
@@ -205,10 +209,12 @@ jobs:
           assert h['tool_profiles']['enabledCount'] >= 10, h
           assert h['tool_profiles']['statefulCount'] >= 4, h
           assert h['tool_profiles']['authenticationRequiredCount'] >= 4, h
-          assert h['browser_state']['persistence']=='session-ephemeral', h
+          assert h['browser_state']['persistence']=='encrypted-per-tool-approved-state', h
+          assert h['admin_profiles']['writerAccess'] is False, h
           assert w['status']=='ok', w
           assert w['browserCore']=='generic', w
           assert w['viewer']['rawCdpExposed'] is False, w
+          assert w['adminProfiles']['persistence']=='durable-operator-only', w
           PY
 
       - name: Preserve Phase 1-3 browser and viewer regression

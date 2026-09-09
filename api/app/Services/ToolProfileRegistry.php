@@ -33,8 +33,10 @@ final class ToolProfileRegistry
         return [
             'slug' => $slug,
             'launchUrl' => $launchUrl,
+            'audience' => $profile['audience'],
             'browserState' => $profile['browser_state'],
             'authentication' => $profile['authentication'],
+            'adminProfile' => $profile['admin_profile'],
         ];
     }
 
@@ -44,6 +46,7 @@ final class ToolProfileRegistry
         $enabled = 0;
         $stateful = 0;
         $authenticationRequired = 0;
+        $adminProfiles = 0;
         foreach ($profiles as $profile) {
             if (($profile['enabled'] ?? false) === true) {
                 $enabled++;
@@ -54,6 +57,9 @@ final class ToolProfileRegistry
             if (($profile['authentication']['required'] ?? false) === true) {
                 $authenticationRequired++;
             }
+            if (($profile['admin_profile']['enabled'] ?? false) === true) {
+                $adminProfiles++;
+            }
         }
 
         return [
@@ -62,6 +68,7 @@ final class ToolProfileRegistry
             'enabledCount' => $enabled,
             'statefulCount' => $stateful,
             'authenticationRequiredCount' => $authenticationRequired,
+            'adminProfileCount' => $adminProfiles,
         ];
     }
 
@@ -99,12 +106,16 @@ final class ToolProfileRegistry
             if (! is_array($profile) || array_is_list($profile)) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile entries must be objects.');
             }
-            $unexpected = array_diff(array_keys($profile), ['enabled', 'launch_url', 'browser_state', 'authentication']);
+            $unexpected = array_diff(array_keys($profile), ['enabled', 'audience', 'launch_url', 'browser_state', 'authentication', 'admin_profile']);
             if ($unexpected !== []) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile contains unsupported fields.');
             }
             if (! array_key_exists('enabled', $profile) || ! is_bool($profile['enabled'])) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile enabled flag must be boolean.');
+            }
+            $audience = $profile['audience'] ?? 'writer';
+            if (! is_string($audience) || ! in_array($audience, ['writer', 'operator'], true)) {
+                throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile audience must be writer or operator.');
             }
             if (! is_string($profile['launch_url'] ?? null) || trim($profile['launch_url']) === '' || strlen($profile['launch_url']) > 8192) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile launch URL must be a bounded non-empty string.');
@@ -122,18 +133,66 @@ final class ToolProfileRegistry
             if ($authentication['required'] && ! $browserState['required']) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Authenticated tool profiles must require authorized browser state.');
             }
+            $adminProfile = $this->validateAdminProfile($profile['admin_profile'] ?? null, $template, $browserState, $authentication);
 
             $validated[$slug] = [
                 'enabled' => $profile['enabled'],
+                'audience' => $audience,
                 'launch_url' => $template,
                 'browser_state' => $browserState,
                 'authentication' => $authentication,
+                'admin_profile' => $adminProfile,
             ];
         }
 
         $this->cachedProfiles = $validated;
 
         return $validated;
+    }
+
+    private function validateAdminProfile(mixed $input, string $defaultLaunchUrl, array $browserState, array $authentication): array
+    {
+        if ($input === null) {
+            return ['enabled' => false, 'launchUrl' => $defaultLaunchUrl];
+        }
+        if (! is_array($input) || array_is_list($input)) {
+            throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile admin_profile must be an object.');
+        }
+        $unexpected = array_diff(array_keys($input), ['enabled', 'launch_url']);
+        if ($unexpected !== []) {
+            throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile admin_profile contains unsupported fields.');
+        }
+        $enabled = $input['enabled'] ?? false;
+        if (! is_bool($enabled)) {
+            throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile admin_profile.enabled must be boolean.');
+        }
+        $launchUrl = $input['launch_url'] ?? $defaultLaunchUrl;
+        if (! is_string($launchUrl) || trim($launchUrl) === '' || strlen($launchUrl) > 8192) {
+            throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile administrator launch URL must be bounded.');
+        }
+        $launchUrl = trim($launchUrl);
+        if ($enabled && preg_match('/\{[A-Za-z0-9_]+\}/', $launchUrl)) {
+            throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Persistent administrator launch URLs cannot contain writer placeholders.');
+        }
+        $this->assertLaunchUrl($launchUrl);
+        if ($enabled && (($authentication['required'] ?? false) !== true || ($browserState['required'] ?? false) !== true)) {
+            throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Persistent administrator profiles require managed authentication and browser state.');
+        }
+        if ($enabled) {
+            $host = strtolower((string) parse_url($launchUrl, PHP_URL_HOST));
+            $allowed = false;
+            foreach ($browserState['allowedHosts'] ?? [] as $allowedHost) {
+                if ($this->hostMatches($host, $allowedHost)) {
+                    $allowed = true;
+                    break;
+                }
+            }
+            if (! $allowed) {
+                throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Administrator launch host is outside browser_state.allowed_hosts.');
+            }
+        }
+
+        return ['enabled' => $enabled, 'launchUrl' => $launchUrl];
     }
 
     private function validateBrowserStatePolicy(mixed $input, string $launchUrl): array

@@ -9,15 +9,20 @@ WORKDIR /srv/browser-worker
 COPY browser-worker/package.json ./package.json
 COPY browser-worker/src ./src
 COPY browser-worker/test ./test
+COPY browser-worker/policies/managed.json /etc/chromium/policies/managed/toprated-runtime.json
 
 ENV NODE_ENV=production
 ENV PORT=8081
 ENV CHROMIUM_EXECUTABLE=/usr/bin/chromium
+ENV ADMIN_PROFILE_ROOT=/var/lib/toprated-browser-runtime/admin-profiles
 
 RUN node --test test/*.test.mjs \
     && test -x /usr/bin/chromium \
     && test -x /usr/bin/xvfb-run \
-    && test -x /usr/bin/xauth
+    && test -x /usr/bin/xauth \
+    && test -f /etc/chromium/policies/managed/toprated-runtime.json \
+    && mkdir -p /var/lib/toprated-browser-runtime/admin-profiles \
+    && chmod 0700 /var/lib/toprated-browser-runtime/admin-profiles
 
 EXPOSE 8081
 CMD ["node", "src/server.mjs"]

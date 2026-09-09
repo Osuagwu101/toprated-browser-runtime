@@ -43,6 +43,9 @@ final class SessionController
         }
 
         $profile = $toolProfiles->resolve($toolSlug, $writerId);
+        if (($profile['audience'] ?? 'writer') !== 'writer') {
+            throw new RuntimeApiException('TOOL_PROFILE_FORBIDDEN', 403, 'This tool profile is restricted to runtime operators.');
+        }
         if (array_key_exists('launch_url', $body)) {
             $suppliedLaunchUrl = trim((string) $request->input('launch_url', ''));
             if (! hash_equals($profile['launchUrl'], $suppliedLaunchUrl)) {

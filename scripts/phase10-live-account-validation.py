@@ -31,11 +31,9 @@ READY_FILE_VALUE = os.environ.get("PHASE10_ADMIN_LOGIN_READY_FILE", "").strip()
 
 TOOLS = {
     "chatgpt": {
-        "bootstrap": "chatgpt-admin-bootstrap",
         "hosts": {"chatgpt.com", "openai.com"},
     },
     "stealthwriter": {
-        "bootstrap": "stealthwriter-admin-bootstrap",
         "hosts": {"stealthwriter.ai"},
     },
 }
@@ -101,7 +99,7 @@ def operator(method, path):
             "x-toprated-operator-secret": OPERATOR_SECRET,
         },
         method=method.upper(),
-    ), timeout=30)
+    ), timeout=180)
 
 
 def worker_json(method, path):
@@ -154,6 +152,15 @@ def close_session(session_id, writer):
         return
     try:
         signed("DELETE", f"/api/sessions/{session_id}", writer)
+    except Exception:
+        pass
+
+
+def close_admin_session(session_id):
+    if not session_id:
+        return
+    try:
+        operator("DELETE", f"/api/operator/tool-auth/{TOOL}/sessions/{session_id}")
     except Exception:
         pass
 
@@ -228,6 +235,7 @@ if TOOL not in TOOLS:
 
 BOOTSTRAP_WRITER = f"phase10-{TOOL}-admin-bootstrap"
 PROOF_WRITER = f"phase10-{TOOL}-live-proof"
+REUSE_WRITER = f"phase10-{TOOL}-persisted-reuse"
 LINK_FILE = Path(os.environ.get(
     "PHASE10_ADMIN_VIEWER_LINK_FILE",
     f"/tmp/phase10-{TOOL}-admin-viewer.txt",
@@ -238,25 +246,20 @@ READY_FILE = Path(READY_FILE_VALUE) if READY_FILE_VALUE else None
 def main():
     bootstrap_id = None
     proof_id = None
+    reuse_id = None
     try:
         progress("PREFLIGHT_RUNTIME")
         code, capacity = signed("GET", "/api/capacity", BOOTSTRAP_WRITER)
         if code != 200 or capacity.get("workerHealthy") is not True:
             die("Standalone runtime preflight failed.")
 
-        progress("RESTORE_OPERATOR_BOUNDARY")
-        operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
         progress("START_ADMIN_BROWSER")
-        code, bootstrap = signed("POST", "/api/sessions", BOOTSTRAP_WRITER, {
-            "writer_id": BOOTSTRAP_WRITER,
-            "tool_slug": TOOLS[TOOL]["bootstrap"],
-        })
+        code, bootstrap = operator("POST", f"/api/operator/tool-auth/{TOOL}/sessions")
         if code not in (200, 201) or bootstrap.get("status") != "active":
             die(f"Administrator browser could not start ({bootstrap.get('code', 'UNKNOWN')}).")
         bootstrap_id = bootstrap.get("sessionId")
         viewer_link, _token, grant, _viewer_url = decode_grant(bootstrap.get("viewerGrant"))
-        worker_session_id = grant.get("sid")
-        if not isinstance(worker_session_id, str) or not worker_session_id:
+        if not isinstance(grant.get("sid"), str) or not grant.get("sid"):
             die("Administrator browser identity is missing.")
 
         secure_write(LINK_FILE, viewer_link + "\n")
@@ -277,29 +280,23 @@ def main():
             min(LOGIN_TIMEOUT_SECONDS, safeLoginSeconds),
         )
 
-        progress("CAPTURE_AUTHORIZED_STATE")
-        code, state = worker_json(
-            "GET",
-            f"/browser/sessions/{parse.quote(worker_session_id)}/authorized-state",
+        progress("APPROVE_PERSISTENT_PROFILE")
+        code, approved = operator(
+            "POST",
+            f"/api/operator/tool-auth/{TOOL}/sessions/{bootstrap_id}/approve",
         )
-        if code != 200 or not isinstance(state, dict):
-            die("Private worker could not capture the authenticated browser state.")
-
-        close_session(bootstrap_id, BOOTSTRAP_WRITER)
+        approved_state = approved.get("approvedState") if isinstance(approved, dict) else {}
+        if code != 200 or approved.get("status") != "ready" or approved_state.get("available") is not True:
+            die(f"Persistent administrator profile could not be approved ({approved.get('code', 'UNKNOWN')}).")
+        state_version = approved_state.get("stateVersion")
         bootstrap_id = None
         LINK_FILE.unlink(missing_ok=True)
 
         progress("START_FRESH_PROOF_BROWSER")
-        code, restored = operator("POST", f"/api/operator/tool-auth/{TOOL}/restore")
-        if code != 200 or restored.get("status") != "ready":
-            die("Operator recovery boundary could not prepare the live proof.")
-
         code, proof = signed("POST", "/api/sessions", PROOF_WRITER, {
             "writer_id": PROOF_WRITER,
             "tool_slug": TOOL,
-            "browser_state": state,
         })
-        state = None
         if code not in (200, 201) or proof.get("status") != "active":
             die(f"Fresh live-account proof failed ({proof.get('code', 'UNKNOWN')}).")
         proof_id = proof.get("sessionId")
@@ -321,11 +318,26 @@ def main():
         if code != 200 or reused.get("reused") is not True or reused.get("sessionId") != proof_id:
             die("Live authenticated session was not reusable without state retransmission.")
 
-        progress("VERIFY_FRESH_AUTHENTICATION")
+        progress("VERIFY_CROSS_SESSION_PERSISTENCE")
         safe = parse.urlsplit(str(status.get("url") or ""))
         safe_location = parse.urlunsplit((safe.scheme, safe.netloc, safe.path, "", ""))
         close_session(proof_id, PROOF_WRITER)
         proof_id = None
+
+        code, persisted = signed("POST", "/api/sessions", REUSE_WRITER, {
+            "writer_id": REUSE_WRITER,
+            "tool_slug": TOOL,
+        })
+        if code != 201 or persisted.get("status") != "active" or persisted.get("reused") is not False:
+            die("Approved authentication did not survive into a new isolated writer session.")
+        reuse_id = persisted.get("sessionId")
+        _reuse_link, reuse_token, _reuse_grant, reuse_viewer = decode_grant(persisted.get("viewerGrant"))
+        code, reuse_status = viewer_status(reuse_viewer, reuse_token)
+        reuse_auth = reuse_status.get("authentication") if isinstance(reuse_status, dict) else {}
+        if code != 200 or not host_allowed(reuse_status.get("url")) or reuse_auth.get("verified") is not True:
+            die("Persisted approved state did not authenticate the new writer browser.")
+        close_session(reuse_id, REUSE_WRITER)
+        reuse_id = None
         assert_clean_runtime(PROOF_WRITER)
         assert_secrets_absent_from_logs()
 
@@ -340,6 +352,9 @@ def main():
             "viewerGrantedAfterAuth": True,
             "freshChromiumProof": True,
             "reuseWithoutStateResend": True,
+            "persistentAdminProfile": True,
+            "approvedStateVersion": state_version,
+            "crossSessionStateReuse": True,
             "finalBrowserResidue": 0,
             "credentialsPrinted": False,
             "rawStatePrinted": False,
@@ -347,7 +362,8 @@ def main():
         }))
     finally:
         close_session(proof_id, PROOF_WRITER)
-        close_session(bootstrap_id, BOOTSTRAP_WRITER)
+        close_session(reuse_id, REUSE_WRITER)
+        close_admin_session(bootstrap_id)
         LINK_FILE.unlink(missing_ok=True)
         if READY_FILE is not None:
             READY_FILE.unlink(missing_ok=True)

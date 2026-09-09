@@ -71,6 +71,49 @@ final class BrowserWorkerClient
         return $this->request('DELETE', '/browser/sessions/'.rawurlencode($workerSessionId));
     }
 
+    public function startAdminProfile(
+        string $toolSlug,
+        string $launchUrl,
+        array $browserStatePolicy,
+        array $authentication,
+    ): array {
+        $payload = [
+            'toolSlug' => $toolSlug,
+            'url' => $launchUrl,
+            'browserStatePolicy' => $browserStatePolicy,
+            'authentication' => $authentication,
+        ];
+        $authenticationTimeout = (int) ($authentication['timeoutSeconds'] ?? 0);
+        $navigationTimeoutMs = (int) config('browser.navigation_timeout_ms', 45000);
+        if ($navigationTimeoutMs < 5000 || $navigationTimeoutMs > 120000) {
+            throw new RuntimeApiException('BROWSER_NAVIGATION_CONFIG_INVALID', 503, 'Browser navigation timeout configuration is invalid.');
+        }
+        $navigationTimeout = (int) ceil($navigationTimeoutMs / 1000);
+        $requestTimeout = min(
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+            max(self::DEFAULT_REQUEST_TIMEOUT_SECONDS, $navigationTimeout + $authenticationTimeout + self::START_REQUEST_OVERHEAD_SECONDS),
+        );
+
+        return $this->request('POST', '/browser/admin-sessions', $payload, true, false, $requestTimeout);
+    }
+
+    public function adminProfileStatus(string $workerSessionId): array
+    {
+        return $this->request('GET', '/browser/admin-sessions/'.rawurlencode($workerSessionId), null, true, true);
+    }
+
+    public function approveAdminProfile(string $workerSessionId): array
+    {
+        return $this->request(
+            'POST',
+            '/browser/admin-sessions/'.rawurlencode($workerSessionId).'/approve',
+            null,
+            true,
+            false,
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+        );
+    }
+
     private function request(
         string $method,
         string $path,
@@ -117,6 +160,12 @@ final class BrowserWorkerClient
             }
             if ($workerCode === 'AUTHENTICATION_NOT_VERIFIED') {
                 throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
+            }
+            if ($workerCode === 'ADMIN_PROFILE_IN_USE') {
+                throw new RuntimeApiException('ADMIN_PROFILE_IN_USE', 409, 'The administrator profile is already active.');
+            }
+            if (in_array($workerCode, ['ADMIN_PROFILE_INVALID', 'ADMIN_PROFILE_FORBIDDEN', 'BROWSER_SESSION_KIND_INVALID'], true)) {
+                throw new RuntimeApiException($workerCode, 422, 'The browser worker rejected the administrator profile operation.');
             }
             if (in_array($workerCode, ['BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT'], true)) {
                 $status = $workerCode === 'BROWSER_NAVIGATION_TIMEOUT' ? 504 : 502;

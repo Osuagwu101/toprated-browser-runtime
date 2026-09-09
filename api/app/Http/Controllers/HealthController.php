@@ -31,6 +31,7 @@ final class HealthController
             'enabledCount' => 0,
             'statefulCount' => 0,
             'authenticationRequiredCount' => 0,
+            'adminProfileCount' => 0,
         ];
 
         try {
@@ -48,6 +49,7 @@ final class HealthController
                 && ($health['lifecycleOwner'] ?? null) === 'laravel'
                 && ($health['viewer']['grantIssuer'] ?? null) === 'laravel'
                 && ($health['viewer']['rawCdpExposed'] ?? true) === false
+                && ($health['adminProfiles']['persistence'] ?? null) === 'durable-operator-only'
                 && ($health['capacity']['configurationValid'] ?? false) === true
                 && (int) ($health['capacity']['maxSessions'] ?? 0) === $configuredMaxSessions;
         } catch (Throwable) {
@@ -89,9 +91,13 @@ final class HealthController
             'lifecycle' => $lifecycle,
             'tool_profiles' => $toolProfileSummary,
             'browser_state' => $browserStateConfiguration === null ? null : [
-                'transport' => 'signed-service-request-to-private-worker',
-                'persistence' => 'session-ephemeral',
+                'transport' => 'encrypted-server-vault-to-private-worker',
+                'persistence' => 'encrypted-per-tool-approved-state',
                 'maxBytes' => $browserStateConfiguration['maxBytes'],
+            ],
+            'admin_profiles' => [
+                'persistence' => 'durable-operator-only',
+                'writerAccess' => false,
             ],
         ], $healthy ? 200 : 503);
     }

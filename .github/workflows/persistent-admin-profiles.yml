@@ -1,0 +1,147 @@
+name: Persistent Administrator Profiles
+
+on:
+  push:
+    branches:
+      - repair/persistent-admin-profiles
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  VIEWER_SIGNING_SECRET: persistence-ci-viewer-secret-not-for-production-0123456789abcdef
+  VIEWER_TOKEN_TTL_SECONDS: 300
+  ADMIN_VIEWER_TOKEN_TTL_SECONDS: 900
+  RUNTIME_SERVICE_AUTH_SECRET: persistence-ci-service-secret-not-for-production-0123456789abcdef
+  RUNTIME_OPERATOR_AUTH_SECRET: persistence-ci-operator-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: persistence-ci-worker-secret-not-for-production-0123456789abcdef
+  SERVICE_AUTH_MAX_SKEW_SECONDS: 300
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 10
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+  BROWSER_STATE_MAX_BYTES: 262144
+  BROWSER_DISPLAY_MODE: virtual-display
+  ADMIN_PROFILE_ROOT: /var/lib/toprated-browser-runtime/admin-profiles
+
+jobs:
+  persistence-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository and unit gates
+        run: |
+          set -euo pipefail
+          bash scripts/typecheck.sh
+          node --test browser-worker/test/*.test.mjs
+          test -f api/app/Services/ApprovedBrowserStateVault.php
+          test -f browser-worker/src/admin-profile-store.mjs
+          test -f browser-worker/policies/managed.json
+          test -f tests/persistent-admin-profile-e2e.py
+          grep -F 'admin-profile-data' docker-compose.yml
+          grep -F 'ADMIN_PROFILE_ROOT' .env.example docker-compose.yml browser-worker/Dockerfile
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+
+      - name: Build containers
+        run: docker compose build
+
+      - name: Boot runtime
+        run: docker compose up -d api browser-worker
+
+      - name: Wait for readiness
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/persistence-api-health.json \
+              && curl --fail --silent http://127.0.0.1:18081/health >/tmp/persistence-worker-health.json; then
+              break
+            fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          api=json.load(open('/tmp/persistence-api-health.json'))
+          worker=json.load(open('/tmp/persistence-worker-health.json'))
+          assert api['status']=='ok', api
+          assert api['browser_state']['persistence']=='encrypted-per-tool-approved-state', api
+          assert api['admin_profiles']=={'persistence':'durable-operator-only','writerAccess':False}, api
+          assert worker['status']=='ok', worker
+          assert worker['adminProfiles']['persistence']=='durable-operator-only', worker
+          assert worker['adminProfiles']['activeCount']==0, worker
+          assert worker['adminProfiles']['persistedCount']==0, worker
+          PY
+
+      - name: Start deterministic authentication fixture
+        run: |
+          set -euo pipefail
+          docker compose exec -d browser-worker node /srv/browser-worker/test/auth-state-fixture.mjs
+          for i in $(seq 1 30); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Validate persistence, expiry recovery, and isolation
+        run: python3 tests/persistent-admin-profile-e2e.py
+
+      - name: Verify encrypted vault and private profile boundary
+        run: |
+          set -euo pipefail
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $row=$db->query("select encrypted_payload,state_version,invalidated_at from tool_authorized_states where tool_slug=\"generic-phase8-state\"")->fetch(PDO::FETCH_ASSOC);
+            if (!$row || (int)$row["state_version"] !== 3 || $row["invalidated_at"] !== null) { fwrite(STDERR,"approved_state_metadata_invalid".PHP_EOL); exit(1); }
+            $payload=(string)$row["encrypted_payload"];
+            if (strlen($payload) < 100) { fwrite(STDERR,"approved_state_ciphertext_missing".PHP_EOL); exit(1); }
+            foreach (["phase8-auth","shared-state-local","shared-state-session"] as $forbidden) {
+              if (str_contains($payload,$forbidden)) { fwrite(STDERR,"plaintext_in_vault=".$forbidden.PHP_EOL); exit(1); }
+            }
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open !== 0) { fwrite(STDERR,"open_sessions=".$open.PHP_EOL); exit(1); }
+            echo "encrypted_vault=pass state_version=3 open_sessions=0".PHP_EOL;
+          '
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs=require('node:fs');
+          const root=process.env.ADMIN_PROFILE_ROOT;
+          const stat=fs.statSync(root);
+          const profiles=fs.readdirSync(root,{withFileTypes:true}).filter((entry)=>entry.isDirectory());
+          if ((stat.mode & 0o077)!==0 || profiles.length!==1 || !/^[a-f0-9]{64}$/.test(profiles[0].name)) process.exit(1);
+          const temporary=fs.readdirSync('/tmp').filter((name)=>name.startsWith('toprated-browser-'));
+          if (temporary.length) { console.error(JSON.stringify({temporary})); process.exit(1); }
+          console.log('profile_boundary=pass persistent=1 temporary=0 mode=0700');
+          NODE
+
+      - name: Verify sensitive material is absent from logs
+        run: |
+          set -euo pipefail
+          docker compose logs --no-color api browser-worker >/tmp/persistence-runtime.log
+          for marker in 'never-store-this' 'phase8-auth' 'shared-state-local' 'shared-state-session' "$RUNTIME_OPERATOR_AUTH_SECRET"; do
+            if grep -F "$marker" /tmp/persistence-runtime.log; then
+              echo "sensitive_value_in_logs=$marker" >&2
+              exit 1
+            fi
+          done
+          echo 'sensitive_logs=clean'
+
+      - name: Container status
+        run: docker compose ps
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans
+          test -z "$(docker compose ps -q)"

@@ -114,10 +114,12 @@ jobs:
           assert h['tool_profiles']['configurationValid'] is True, h
           assert h['tool_profiles']['statefulCount'] >= 2, h
           assert h['tool_profiles']['authenticationRequiredCount'] >= 2, h
-          assert h['browser_state']['persistence']=='session-ephemeral', h
+          assert h['browser_state']['persistence']=='encrypted-per-tool-approved-state', h
+          assert h['admin_profiles']['writerAccess'] is False, h
           assert w['status']=='ok', w
           assert w['browserCore']=='generic', w
           assert w['viewer']['rawCdpExposed'] is False, w
+          assert w['adminProfiles']['persistence']=='durable-operator-only', w
           PY
 
       - name: Preserve Phase 1-3 browser and viewer regression

@@ -47,7 +47,7 @@ test('bounds the generic browser navigation readiness timeout', () => {
 
 test('Phase 6 retains configurable capacity bounded to the blueprint target', () => {
   assert.equal(RUNTIME_PHASE, 6);
-  const controller = new BrowserSessionController({ executablePath: '/does/not/exist', maxSessions: 3 });
+  const controller = new BrowserSessionController({ executablePath: '/does/not/exist', maxSessions: 3, adminProfileStore: {} });
   assert.deepEqual(controller.listStatus(), {
     phase: 6,
     activeCount: 0,

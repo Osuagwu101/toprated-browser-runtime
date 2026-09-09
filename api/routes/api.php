@@ -21,4 +21,7 @@ Route::middleware(['runtime.security:service', 'service.auth'])->group(function 
 Route::middleware(['runtime.security:operator', 'operator.auth'])->prefix('/operator')->group(function (): void {
     Route::get('/tool-auth/{tool}', [ToolAuthController::class, 'show']);
     Route::post('/tool-auth/{tool}/restore', [ToolAuthController::class, 'restore']);
+    Route::post('/tool-auth/{tool}/sessions', [ToolAuthController::class, 'startSession']);
+    Route::post('/tool-auth/{tool}/sessions/{session}/approve', [ToolAuthController::class, 'approveSession']);
+    Route::delete('/tool-auth/{tool}/sessions/{session}', [ToolAuthController::class, 'destroySession']);
 });

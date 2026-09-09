@@ -13,7 +13,6 @@ import os
 import secrets
 import stat
 import sys
-import tempfile
 import time
 from pathlib import Path
 from urllib import error, parse, request
@@ -22,6 +21,7 @@ API = os.environ.get("API_BASE", "http://127.0.0.1:18080").rstrip("/")
 WORKER = os.environ.get("WORKER_BASE", "http://127.0.0.1:18081").rstrip("/")
 SERVICE_SECRET = os.environ.get("RUNTIME_SERVICE_AUTH_SECRET", "").encode()
 WORKER_SECRET = os.environ.get("WORKER_CONTROL_SECRET", "")
+OPERATOR_SECRET = os.environ.get("RUNTIME_OPERATOR_AUTH_SECRET", "")
 LOGIN_TIMEOUT_SECONDS = int(os.environ.get("PHASE8_ADMIN_LOGIN_TIMEOUT_SECONDS", "900"))
 LINK_FILE = Path(os.environ.get("PHASE8_ADMIN_VIEWER_LINK_FILE", "/tmp/phase8-phrasly-admin-viewer.txt"))
 BOOTSTRAP_WRITER = "phase8-admin-bootstrap"
@@ -82,6 +82,26 @@ def decode_grant(grant):
     return grant["url"], token, payload, viewer_url
 
 
+def operator(method, path):
+    if len(OPERATOR_SECRET.encode()) < 32:
+        die("Runtime operator authentication is not configured.")
+    req = request.Request(
+        API + path,
+        headers={"accept": "application/json", "x-toprated-operator-secret": OPERATOR_SECRET},
+        method=method,
+    )
+    try:
+        with request.urlopen(req, timeout=180) as response:
+            return response.status, json.loads(response.read() or b"{}")
+    except error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read() or b"{}")
+        except Exception:
+            return exc.code, {"status": "error"}
+    except Exception:
+        die("Could not reach the runtime operator API.")
+
+
 def worker_json(path):
     if len(WORKER_SECRET.encode()) < 32:
         die("Worker control authentication is not configured.")
@@ -134,15 +154,19 @@ def close_session(session_id, writer):
             pass
 
 
+def close_admin_session(session_id):
+    if session_id:
+        try:
+            operator("DELETE", f"/api/operator/tool-auth/phrasly/sessions/{session_id}")
+        except Exception:
+            pass
+
+
 def main():
     bootstrap_id = None
     proof_id = None
-    state_file = None
     try:
-        code, bootstrap = signed("POST", "/api/sessions", BOOTSTRAP_WRITER, {
-            "writer_id": BOOTSTRAP_WRITER,
-            "tool_slug": "phrasly-admin-bootstrap",
-        })
+        code, bootstrap = operator("POST", "/api/operator/tool-auth/phrasly/sessions")
         if code not in (200, 201):
             die(f"Administrator browser could not start ({bootstrap.get('code', 'UNKNOWN')}).")
         bootstrap_id = bootstrap.get("sessionId")
@@ -169,17 +193,10 @@ def main():
         else:
             die("Phrasly did not reach an authenticated dashboard before the operator-login timeout.")
 
-        code, state = worker_json(f"/browser/sessions/{parse.quote(worker_session_id)}/authorized-state")
-        if code != 200 or not isinstance(state, dict):
-            die("The private worker could not capture the authenticated browser state.")
-
-        descriptor, state_path = tempfile.mkstemp(prefix="phase8-phrasly-state-", suffix=".json")
-        os.close(descriptor)
-        state_file = Path(state_path)
-        os.chmod(state_file, stat.S_IRUSR | stat.S_IWUSR)
-        secure_write(state_file, json.dumps(state, separators=(",", ":")))
-
-        close_session(bootstrap_id, BOOTSTRAP_WRITER)
+        code, approved = operator("POST", f"/api/operator/tool-auth/phrasly/sessions/{bootstrap_id}/approve")
+        approved_state = approved.get("approvedState") if isinstance(approved, dict) else {}
+        if code != 200 or approved.get("status") != "ready" or approved_state.get("available") is not True:
+            die("The persistent Phrasly administrator profile could not be approved.")
         bootstrap_id = None
         try:
             LINK_FILE.unlink(missing_ok=True)
@@ -189,7 +206,6 @@ def main():
         code, proof = signed("POST", "/api/sessions", PROOF_WRITER, {
             "writer_id": PROOF_WRITER,
             "tool_slug": "phrasly",
-            "browser_state": state,
         })
         if code not in (200, 201) or proof.get("status") != "active":
             die(f"Live Phrasly shared-state proof failed ({proof.get('code', 'UNKNOWN')}).")
@@ -208,21 +224,18 @@ def main():
             "tool": "phrasly",
             "authenticated": True,
             "viewerGrantedAfterAuth": True,
-            "statePersisted": False,
+            "statePersisted": True,
+            "persistentAdminProfile": True,
+            "approvedStateVersion": approved_state.get("stateVersion"),
             "credentialsPrinted": False,
         }))
     finally:
         close_session(proof_id, PROOF_WRITER)
-        close_session(bootstrap_id, BOOTSTRAP_WRITER)
+        close_admin_session(bootstrap_id)
         try:
             LINK_FILE.unlink(missing_ok=True)
         except Exception:
             pass
-        if state_file:
-            try:
-                state_file.unlink(missing_ok=True)
-            except Exception:
-                pass
 
 
 if __name__ == "__main__":

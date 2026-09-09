@@ -98,7 +98,7 @@ The current implementation adds:
 
 - the first real `phrasly` tool profile, kept in tool configuration rather than common browser code;
 - a generic browser-state policy and authentication-indicator extension to the profile registry;
-- signed, bounded delivery of authorized shared browser state from Laravel to the private worker;
+- encrypted, bounded server-side delivery of approved browser state from Laravel to the private worker;
 - cookie injection plus `localStorage`/`sessionStorage` bootstrap before protected navigation;
 - allowed-host validation for state/cookie injection;
 - rejection of writer password, OTP and verification-code fields;
@@ -106,7 +106,7 @@ The current implementation adds:
 - generic authentication verification before Laravel activates the browser or issues the first viewer grant;
 - cleanup of unverified browsers with no viewer grant;
 - no raw browser-state persistence in durable session records; and
-- a manual real-Phrasly acceptance harness that reads state only from a permission-restricted local file and never prints it.
+- a manual real-Phrasly operator harness that approves a durable per-tool administrator profile and never prints credentials or browser state.
 
 The exact first complete implementation head `edd8306f27d1d9302da1f783a5fd1fef35dad456` passed all six authoritative workflows on the same SHA:
 
@@ -127,9 +127,9 @@ The current Phase 8 audit is recorded in `docs/audits/phase-8.md`.
 
 ## Architecture
 
-- `api/` — Laravel control plane: signed and rate-limited service/operator APIs, strict JSON request policy, persistent session records, writer ownership, generic tool-profile/state policy, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
-- `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated Chromium profiles, ephemeral authorized-state injection, generic authentication verification, restricted frame/input viewer and exact per-session cleanup.
-- `docker-compose.yml` — portable Linux + Docker topology with persistent runtime DB storage and localhost-only host publication for the current development/CI environment.
+- `api/` — Laravel control plane: signed and rate-limited service/operator APIs, strict JSON request policy, encrypted approved-state vault, persistent session records, writer ownership, generic tool-profile/state policy, capacity, lifecycle orchestration, lifecycle reaper/reconciliation and viewer-grant issuance.
+- `browser-worker/` — generic Node.js Chromium worker: authenticated session-scoped lifecycle control, loopback-only CDP, isolated temporary writer/proof profiles, durable operator-only per-tool admin profiles, generic authentication verification, restricted frame/input viewer and exact cleanup.
+- `docker-compose.yml` — portable Linux + Docker topology with persistent runtime DB and administrator-profile volumes plus localhost-only host publication for the current development/CI environment.
 - `scripts/typecheck.sh` — repository-wide executable type/syntax/configuration gate for the current language/toolchain.
 - `scripts/phase8-phrasly-acceptance.py` — manual safe acceptance harness for the real Phrasly Phase 8 exit gate.
 - `docs/audits/` — phase gates, issue history and regression evidence.
@@ -143,6 +143,7 @@ Launch requests identify a writer and `tool_slug`; Laravel resolves the configur
 Current profile fields are:
 
 - `enabled`
+- optional `audience` (`writer` or `operator`)
 - `launch_url`
 - optional `browser_state.required`
 - optional `browser_state.allowed_hosts`
@@ -150,10 +151,12 @@ Current profile fields are:
 - optional `authentication.url_contains_any`
 - optional `authentication.selectors_any`
 - optional `authentication.timeout_seconds`
+- optional `admin_profile.enabled`
+- optional `admin_profile.launch_url`
 
 `{writer_id}` remains the supported launch template placeholder. Unknown/disabled profiles and unsupported profile fields/placeholders fail closed.
 
-For stateful profiles, raw authorized state is accepted only on the signed service API and authenticated private worker control plane. Phase 8 accepts cookies and Web Storage, constrains them to the profile's allowed hosts, injects them into a fresh isolated Chromium, verifies the configured authenticated indicators, then returns viewer access. The raw state is not stored in the durable `browser_sessions` table.
+For a managed stateful profile, an operator opens its persistent admin browser and completes normal provider authentication. Approval captures only allowed-host cookies and Web Storage, proves that state in a fresh isolated Chromium, and stores the envelope encrypted with Laravel `APP_KEY`. Writer launches load it server-side into a fresh temporary profile. The raw state is never stored in `browser_sessions`, returned to writers, or used to run writers directly on the admin profile.
 
 Phrasly is the Phase 8 reference profile. Authentication-failure/admin-reauth behavior remains Phase 9 work and is not claimed here.
 
@@ -172,6 +175,13 @@ Signed service routes:
 - `POST /api/sessions/{id}/activity`
 - `POST /api/sessions/{id}/viewer-grant`
 - `DELETE /api/sessions/{id}`
+
+Operator-only authentication lifecycle routes:
+
+- `GET /api/operator/tool-auth/{tool}`
+- `POST /api/operator/tool-auth/{tool}/sessions`
+- `POST /api/operator/tool-auth/{tool}/sessions/{id}/approve`
+- `DELETE /api/operator/tool-auth/{tool}/sessions/{id}`
 
 Service requests are HMAC-SHA256 signed with timestamp, nonce, bounded writer identity and request-body hash. Replayed nonces are rejected. Protected API routes reject unsigned query strings, malformed/non-object JSON, unsupported media types, oversized bodies and excess request rates. Worker lifecycle endpoints require a separate internal worker-control secret and enforce their own malformed-request and rate-limit boundary.
 
@@ -214,7 +224,7 @@ curl http://127.0.0.1:18081/health
 docker compose down -v --remove-orphans
 ```
 
-Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNTIME_SERVICE_AUTH_SECRET`, `WORKER_CONTROL_SECRET`, `VIEWER_SIGNING_SECRET`, viewer TTL/base URL, valid `MAX_BROWSER_SESSIONS`, valid lifecycle policy values, `BROWSER_STATE_MAX_BYTES` and a valid tool-profile configuration source.
+Required launch-critical configuration includes a stable Laravel `APP_KEY`, `RUNTIME_SERVICE_AUTH_SECRET`, `RUNTIME_OPERATOR_AUTH_SECRET`, `WORKER_CONTROL_SECRET`, `VIEWER_SIGNING_SECRET`, viewer TTL/base URL, valid `MAX_BROWSER_SESSIONS`, valid lifecycle policy values, `BROWSER_STATE_MAX_BYTES`, `ADMIN_PROFILE_ROOT` and a valid tool-profile configuration source. Preserve `APP_KEY`, the runtime database and the admin-profile volume across deployments.
 
 ## Blueprint sequencing
 
