@@ -94,9 +94,11 @@ jobs:
           }
 
           stealth['launch_url'] = 'http://127.0.0.1:19093/stealthwriter/dashboard'
+          stealth['admin_login_url'] = 'http://127.0.0.1:19093/stealthwriter/login'
           stealth['browser_state']['allowed_hosts'] = ['127.0.0.1']
 
           chatgpt['launch_url'] = 'http://127.0.0.1:19093/chatgpt/'
+          chatgpt['admin_login_url'] = 'http://127.0.0.1:19093/chatgpt/'
           chatgpt['browser_state']['allowed_hosts'] = ['127.0.0.1']
 
           # Clone the same policies under deliberately non-vendor slugs. Running the
