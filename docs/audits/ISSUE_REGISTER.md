@@ -581,3 +581,16 @@ The production API and browser worker reported healthy, the Caddy ingress served
 The approved external acceptance harness ran from the separate Windows network and returned `PASS` with exit code `0`. It verified health, TLS/HSTS, rejection of unsigned service access, privacy of worker control routes, real Chromium launch, restricted viewer behavior, and cleanup. Runtime secrets were not printed or committed. The initially disclosed root password was rotated successfully before closure.
 
 Owner approval was received on 2026-09-09. PR #16 merged to `main` at `778efa353aed5c75c5f9a0ecee9d4fef42ec26c6`, and all 12 authoritative workflows passed on that exact merged commit. Phase 14 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 15 remains **NOT STARTED**.
+
+
+### SB-014-009 — Final completion-ledger reconnect test timing race
+
+Severity: Major / inherited-regression blocker.
+
+RED evidence: Phase 10 run `34417335128`, job `102685005693`, failed the inherited Phase 6 lifecycle step when a reconnect viewer-grant request returned `SESSION_NOT_ACTIVE`.
+
+Underlying cause: the fixture left only a two-second margin inside the disconnect grace boundary while a one-second reaper was active, allowing loaded-runner scheduling to consume the margin before the reconnect request.
+
+Corrective action: retain the aged reconnect case with a ten-second scheduling margin inside the same configured grace window. No production lifecycle value, reaper behavior, or assertion was weakened.
+
+Status: **FIXED / FINAL EXACT-HEAD VERIFICATION REQUIRED**.
