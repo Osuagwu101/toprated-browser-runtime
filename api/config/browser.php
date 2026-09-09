@@ -22,4 +22,7 @@ return [
     'session_reaper_interval_seconds' => (int) env('SESSION_REAPER_INTERVAL_SECONDS', 30),
     'tool_profiles_path' => (string) env('TOOL_PROFILES_PATH', base_path('config/tool-profiles.json')),
     'browser_state_max_bytes' => (int) env('BROWSER_STATE_MAX_BYTES', 262144),
+    'identity_encryption_key' => (string) env('BROWSER_IDENTITY_ENCRYPTION_KEY', ''),
+    'allow_legacy_browser_state_input' => filter_var(env('ALLOW_LEGACY_BROWSER_STATE_INPUT', false), FILTER_VALIDATE_BOOL),
+    'allow_legacy_auth_restore' => filter_var(env('ALLOW_LEGACY_AUTH_RESTORE', false), FILTER_VALIDATE_BOOL),
 ];

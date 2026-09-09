@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\RuntimeApiException;
 use App\Services\AuthorizedBrowserState;
+use App\Services\PersistentBrowserIdentity;
 use App\Services\SessionManager;
+use App\Services\ToolAuthenticationState;
 use App\Services\ToolProfileRegistry;
 use App\Services\ViewerGrantService;
 use Illuminate\Http\JsonResponse;
@@ -18,6 +20,8 @@ final class SessionController
         ViewerGrantService $viewerGrants,
         ToolProfileRegistry $toolProfiles,
         AuthorizedBrowserState $authorizedBrowserState,
+        PersistentBrowserIdentity $identities,
+        ToolAuthenticationState $toolAuthentication,
     ): JsonResponse {
         $writerId = $this->writerId($request);
         $bodyWriterId = trim((string) $request->input('writer_id', ''));
@@ -52,11 +56,27 @@ final class SessionController
 
         $browserState = null;
         if (array_key_exists('browser_state', $body)) {
+            if (config('browser.allow_legacy_browser_state_input', false) !== true) {
+                throw new RuntimeApiException(
+                    'BROWSER_STATE_INPUT_FORBIDDEN',
+                    422,
+                    'Writer launches consume the administrator-approved browser identity automatically.',
+                );
+            }
             $browserState = $authorizedBrowserState->normalize(
                 $body['browser_state'],
                 $profile['browserState'],
                 $profile['launchUrl'],
             );
+        }
+        if ($browserState === null
+            && ($profile['browserState']['required'] ?? false) === true
+            && config('browser.allow_legacy_browser_state_input', false) !== true) {
+            $browserState = $identities->load($toolSlug);
+            if ($browserState === null) {
+                $toolAuthentication->requireReauthentication($toolSlug, 'BROWSER_IDENTITY_MISSING');
+                throw $toolAuthentication->reauthRequired();
+            }
         }
 
         // Fail before Chromium is created if the viewer cannot issue a usable grant.

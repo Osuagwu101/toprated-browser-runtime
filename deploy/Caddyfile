@@ -1,0 +1,29 @@
+{$RUNTIME_DOMAIN} {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    @health path /api/health
+    handle @health {
+        reverse_proxy api:8080
+    }
+
+    @service path /api/capacity /api/sessions /api/sessions/*
+    handle @service {
+        reverse_proxy api:8080
+    }
+
+    @viewer path /viewer/*
+    handle @viewer {
+        reverse_proxy browser-worker:8081
+    }
+
+    handle {
+        respond "Not Found" 404
+    }
+}

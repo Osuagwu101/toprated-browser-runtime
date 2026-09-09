@@ -1,0 +1,66 @@
+name: Phase 14 Deployment Readiness
+
+on:
+  push:
+    branches:
+      - main
+      - persistent-browser-identity
+      - phase14-contabo-deployment
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  phase14-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/phase14-bootstrap-ubuntu.sh
+          python3 -m py_compile scripts/phase14-external-acceptance.py
+          test -s deploy/Caddyfile
+          test -s deploy/docker-compose.production.yml
+
+      - name: Validate production Compose merge
+        env:
+          APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          BROWSER_IDENTITY_ENCRYPTION_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+          WORKER_CONTROL_SECRET: phase14-worker-control-secret-000000000000000000000000
+          RUNTIME_SERVICE_AUTH_SECRET: phase14-service-auth-secret-00000000000000000000000000
+          RUNTIME_OPERATOR_AUTH_SECRET: phase14-operator-auth-secret-000000000000000000000000
+          VIEWER_SIGNING_SECRET: phase14-viewer-signing-secret-0000000000000000000000000
+          RUNTIME_DOMAIN: runtime.example.test
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet
+          rendered="$(docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --format json)"
+          jq -e '.services.api.ports[] | select(.target == 8080 and .published == "18080" and .host_ip == "127.0.0.1")' <<<"${rendered}"
+          jq -e '.services."browser-worker".ports[] | select(.target == 8081 and .published == "18081" and .host_ip == "127.0.0.1")' <<<"${rendered}"
+          jq -e '.services.ingress.ports[] | select(.target == 443 and .published == "443")' <<<"${rendered}"
+          ! jq -e '[.services.api.ports[], .services."browser-worker".ports[]] | any(.host_ip != "127.0.0.1")' <<<"${rendered}"
+
+      - name: Validate Caddy ingress policy
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e RUNTIME_DOMAIN=runtime.example.test \
+            -v "${PWD}/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine caddy validate --config /etc/caddy/Caddyfile
+          grep -q '/viewer/\*' deploy/Caddyfile
+          grep -q '/api/health' deploy/Caddyfile
+          ! grep -q 'reverse_proxy.*browser.*/browser' deploy/Caddyfile
+
+      - name: Reject committed secret material
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -f .env
+          ! git grep -nE '(BEGIN (RSA |OPENSSH )?PRIVATE KEY|ssh-rsa [A-Za-z0-9+/]{100,}|RUNTIME_SERVICE_AUTH_SECRET=[A-Za-z0-9+/=_-]{32,})' -- ':!.env.example' ':!.github/workflows/phase14-deployment-readiness.yml'

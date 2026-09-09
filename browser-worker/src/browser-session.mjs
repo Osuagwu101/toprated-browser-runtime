@@ -289,6 +289,15 @@ export class BrowserSessionController {
     return { inputAccepted: true, ...(await this.refreshMetadata(sessionId)) };
   }
 
+  async verifyAuthentication(sessionId, policy) {
+    const session = this.assertSession(sessionId);
+    const authentication = await verifyAuthentication(session.cdp, policy || {});
+    session.authenticationRequired = authentication.required === true;
+    session.authenticationVerified = authentication.verified === true;
+
+    return { ...authentication, ...(await this.refreshMetadata(sessionId)) };
+  }
+
   async exportAuthorizedState(sessionId) {
     const session = this.assertSession(sessionId);
     await session.cdp.send('Network.enable');

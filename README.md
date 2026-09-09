@@ -19,8 +19,24 @@ Verified status:
 - Phase 9 — authentication-failure behaviour: **GREEN / COMPLETE / APPROVED**.
 - Phase 10 — generic multi-tool validation with SneakWrite, StealthWriter and ChatGPT: **GREEN / COMPLETE / OWNER APPROVED 2026-09-07**.
 - Phase 11 — security hardening: **GREEN / COMPLETE / OWNER APPROVED 2026-09-08**.
+- Phase 12 — measured performance evidence: **GREEN / COMPLETE / OWNER APPROVED 2026-09-08**.
+- Phase 13 — Contabo VPS selection and purchase: **GREEN / COMPLETE / OWNER APPROVED 2026-09-08**.
+- Phase 14 — standalone Contabo deployment: **TECHNICALLY GREEN / OWNER APPROVED / AWAITING FINAL MAIN VALIDATION**.
 
 The existing Browser Use production path remains untouched.
+
+## Persistent administrator-approved identity
+
+The runtime now owns a first-class persistent browser identity lifecycle for authenticated tools:
+
+- an operator-only restricted browser lets the administrator complete normal login, MFA/OTP and verification directly;
+- authentication is checked against the generic tool profile before capture;
+- cookies and Web Storage are host-scoped, encrypted at rest with a dedicated key, and versioned per tool;
+- writer launches load the approved identity internally into separate ephemeral Chromium profiles;
+- production defaults reject caller-supplied raw browser state and status-only authentication restore; and
+- expired authentication blocks viewer content and later launches until the administrator completes a new verified capture.
+
+See `docs/persistent-browser-identity.md` for the architecture, configuration, administrator and writer workflows, recovery process, and validation coverage.
 
 ## Phase 6 closure evidence
 
@@ -218,12 +234,12 @@ Required launch-critical configuration includes a valid Laravel `APP_KEY`, `RUNT
 
 ## Blueprint sequencing
 
-Phase 10 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 11 security hardening passed its implementation and final-documentation-head Phase 1–11 workflows and received owner approval on 2026-09-08. Phase 11 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 12 is not started.
+Phases 1–13 are **GREEN / COMPLETE / OWNER APPROVED**. Phase 14 is in progress on the standalone deployment branch; repository readiness is green while live Contabo deployment and external acceptance remain pending.
 
 Later work remains outside the Phase 11 claim:
 
-- Phase 12/18 empirical resource and concurrency measurements;
-- Phase 14 production-host deployment; and
+- Phase 14 production-host deployment completion;
+- Phase 18 empirical safe-concurrency measurement; and
 - Phase 15 production provider integration.
 
 ## Financial rule

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Services\AuthorizedBrowserState;
 use App\Services\BrowserWorkerClient;
+use App\Services\PersistentBrowserIdentity;
 use App\Services\SessionManager;
 use App\Services\ToolProfileRegistry;
 use App\Services\ViewerGrantService;
@@ -19,12 +20,14 @@ final class HealthController
         SessionManager $sessions,
         ToolProfileRegistry $toolProfiles,
         AuthorizedBrowserState $authorizedBrowserState,
+        PersistentBrowserIdentity $identities,
     ): JsonResponse {
         $databaseHealthy = false;
         $workerHealthy = false;
         $configurationHealthy = false;
         $lifecycle = null;
         $browserStateConfiguration = null;
+        $identityConfiguration = null;
         $toolProfileSummary = [
             'configurationValid' => false,
             'configuredCount' => 0,
@@ -59,6 +62,7 @@ final class HealthController
             $lifecycle = $sessions->lifecycleConfiguration();
             $toolProfileSummary = $toolProfiles->summary();
             $browserStateConfiguration = $authorizedBrowserState->configuration();
+            $identityConfiguration = $identities->configuration();
             $configurationHealthy = strlen((string) config('browser.service_auth_secret', '')) >= 32
                 && strlen((string) config('browser.operator_auth_secret', '')) >= 32
                 && strlen((string) config('browser.worker_control_secret', '')) >= 32
@@ -89,8 +93,14 @@ final class HealthController
             'lifecycle' => $lifecycle,
             'tool_profiles' => $toolProfileSummary,
             'browser_state' => $browserStateConfiguration === null ? null : [
-                'transport' => 'signed-service-request-to-private-worker',
-                'persistence' => 'session-ephemeral',
+                'transport' => config('browser.allow_legacy_browser_state_input', false)
+                    ? 'signed-service-request-to-private-worker'
+                    : 'operator-capture-encrypted-vault-to-private-worker',
+                'persistence' => config('browser.allow_legacy_browser_state_input', false)
+                    ? 'session-ephemeral'
+                    : 'encrypted-at-rest',
+                'writerStateInputAccepted' => config('browser.allow_legacy_browser_state_input', false) === true,
+                'encryption' => $identityConfiguration['cipher'] ?? null,
                 'maxBytes' => $browserStateConfiguration['maxBytes'],
             ],
         ], $healthy ? 200 : 503);

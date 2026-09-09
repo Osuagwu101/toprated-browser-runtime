@@ -3,6 +3,8 @@ name: Phase 8 Phrasly Reference Implementation
 on:
   push:
     branches:
+      - persistent-browser-identity
+      - phase14-contabo-deployment
       - phase13-vps-selection
       - phase12-performance-testing
       - phase11-security-hardening
@@ -17,6 +19,7 @@ permissions:
 
 env:
   APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  BROWSER_IDENTITY_ENCRYPTION_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
   VIEWER_SIGNING_SECRET: phase8-ci-viewer-signing-secret-not-for-production-0123456789abcdef
   VIEWER_TOKEN_TTL_SECONDS: 300
   RUNTIME_SERVICE_AUTH_SECRET: phase8-ci-service-auth-secret-not-for-production-0123456789abcdef
@@ -31,6 +34,8 @@ env:
   SESSION_STARTUP_GRACE_SECONDS: 5
   SESSION_REAPER_INTERVAL_SECONDS: 1
   BROWSER_STATE_MAX_BYTES: 262144
+  ALLOW_LEGACY_BROWSER_STATE_INPUT: true
+  ALLOW_LEGACY_AUTH_RESTORE: true
 
 jobs:
   phase8-phrasly-reference:
