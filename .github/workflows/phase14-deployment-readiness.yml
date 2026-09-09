@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - persistent-browser-identity
       - phase14-contabo-deployment
   pull_request:
     branches:
@@ -31,6 +32,7 @@ jobs:
       - name: Validate production Compose merge
         env:
           APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          BROWSER_IDENTITY_ENCRYPTION_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
           WORKER_CONTROL_SECRET: phase14-worker-control-secret-000000000000000000000000
           RUNTIME_SERVICE_AUTH_SECRET: phase14-service-auth-secret-00000000000000000000000000
           RUNTIME_OPERATOR_AUTH_SECRET: phase14-operator-auth-secret-000000000000000000000000

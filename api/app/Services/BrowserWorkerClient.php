@@ -71,6 +71,20 @@ final class BrowserWorkerClient
         return $this->request('DELETE', '/browser/sessions/'.rawurlencode($workerSessionId));
     }
 
+    public function exportAuthorizedState(string $workerSessionId): array
+    {
+        return $this->request('GET', '/browser/sessions/'.rawurlencode($workerSessionId).'/authorized-state');
+    }
+
+    public function verifyAuthentication(string $workerSessionId, array $authentication): array
+    {
+        return $this->request(
+            'POST',
+            '/browser/sessions/'.rawurlencode($workerSessionId).'/verify-authentication',
+            ['authentication' => $authentication],
+        );
+    }
+
     private function request(
         string $method,
         string $path,

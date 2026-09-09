@@ -158,6 +158,38 @@ final class SessionManager
         });
     }
 
+    public function startOperatorAuthentication(string $toolSlug, string $adminLoginUrl, array $browserStatePolicy): array
+    {
+        $operatorPolicy = [
+            'required' => false,
+            'allowedHosts' => $browserStatePolicy['allowedHosts'] ?? [],
+        ];
+
+        return $this->create(
+            $this->operatorWriterId($toolSlug),
+            $this->operatorToolSlug($toolSlug),
+            $adminLoginUrl,
+            null,
+            $operatorPolicy,
+            ['required' => false, 'urlContainsAny' => [], 'selectorsAny' => [], 'timeoutSeconds' => 10],
+        );
+    }
+
+    public function operatorWorkerSessionId(string $sessionId, string $toolSlug): string
+    {
+        $session = $this->ownedActive($sessionId, $this->operatorWriterId($toolSlug));
+        if (! hash_equals($this->operatorToolSlug($toolSlug), $session->tool_slug) || $session->worker_session_id === null) {
+            throw new RuntimeApiException('OPERATOR_AUTH_SESSION_INVALID', 409, 'Administrator authentication session is not usable.');
+        }
+
+        return $session->worker_session_id;
+    }
+
+    public function closeOperatorAuthentication(string $sessionId, string $toolSlug): array
+    {
+        return $this->close($sessionId, $this->operatorWriterId($toolSlug));
+    }
+
     public function status(string $sessionId, string $writerId): array
     {
         return $this->withSessionLock($sessionId, function () use ($sessionId, $writerId): array {
@@ -502,6 +534,16 @@ final class SessionManager
             : null;
 
         return $this->viewerGrants->issue($session->worker_session_id, $session->writer_id, $ttl);
+    }
+
+    private function operatorWriterId(string $toolSlug): string
+    {
+        return 'runtime-operator-'.substr(hash('sha256', $toolSlug), 0, 32);
+    }
+
+    private function operatorToolSlug(string $toolSlug): string
+    {
+        return 'admin-'.substr(hash('sha256', $toolSlug), 0, 32).'-admin-bootstrap';
     }
 
     private function owned(string $sessionId, string $writerId): BrowserSession

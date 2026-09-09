@@ -10,6 +10,22 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  if (requestUrl.pathname === '/admin-login') {
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>ADMIN_LOGIN</title></head><body>
+    <button id="approve" style="position:absolute;left:100px;top:100px;width:260px;height:100px">Approve identity</button>
+    <script>
+      document.getElementById('approve').addEventListener('click', () => {
+        document.cookie = 'phase8-auth=ok; Path=/; SameSite=Lax';
+        localStorage.setItem('phase8-local', 'shared-state-local');
+        sessionStorage.setItem('phase8-session', 'shared-state-session');
+        location.href = '/dashboard';
+      });
+    </script></body></html>`;
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store, max-age=0' });
+    response.end(html);
+    return;
+  }
+
   if (requestUrl.pathname !== '/dashboard') {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
     response.end('not found');

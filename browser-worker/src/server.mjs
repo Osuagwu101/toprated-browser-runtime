@@ -60,7 +60,7 @@ function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-ag
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', 'content-security-policy': `default-src 'none'; img-src 'self' blob: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`, 'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()', 'cross-origin-opener-policy': 'same-origin', 'cross-origin-resource-policy': 'same-origin', 'x-frame-options': 'DENY' })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
-function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
+function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
 function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
@@ -147,6 +147,12 @@ const server = http.createServer(async (request, response) => {
         return writeJson(response, 200, controller.getStatus(sessionId));
       }
       if (request.method === 'GET' && action === 'authorized-state') return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
+      if (request.method === 'POST' && action === 'verify-authentication') {
+        const body = await readJson(request, 64 * 1024);
+        assertAllowedFields(body, ['authentication']);
+        const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+        return writeJson(response, 200, await controller.verifyAuthentication(sessionId, authenticationPolicy));
+      }
       if (request.method === 'POST' && action === 'navigate') {
         const body = await readJson(request);
         assertAllowedFields(body, ['url']);
