@@ -69,7 +69,9 @@ final class SessionController
                 $profile['launchUrl'],
             );
         }
-        if ($browserState === null && ($profile['browserState']['required'] ?? false) === true) {
+        if ($browserState === null
+            && ($profile['browserState']['required'] ?? false) === true
+            && config('browser.allow_legacy_browser_state_input', false) !== true) {
             $browserState = $identities->load($toolSlug);
             if ($browserState === null) {
                 $toolAuthentication->requireReauthentication($toolSlug, 'BROWSER_IDENTITY_MISSING');

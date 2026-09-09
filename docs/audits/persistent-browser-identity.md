@@ -28,3 +28,7 @@ Blueprint in force: Master Blueprint v1.1. This is a backward-compatible correct
 ## Gate status
 
 Implementation is **IMPLEMENTED, UNVERIFIED** until the new workflow and every inherited authoritative workflow pass on the exact branch head. Phase 14 remains **IN PROGRESS** and still requires live Contabo deployment/external acceptance plus owner approval.
+
+## Red-run history
+
+- Remote head `aa4aecd6011c4de77bcb1eb0a173b971ad146aff`: new Persistent Browser Identity push run `34330466780` passed, but inherited Phase 8 run `34330466457` and Phase 9 run `34330466485` failed at the unchanged Phase 8 missing-state assertion. The compatibility flag permitted legacy state input, but the new controller still converted a missing legacy payload into the production `TOOL_REAUTH_REQUIRED` response. The correction preserves the historical `BROWSER_STATE_REQUIRED` response only when the explicit CI compatibility flag is enabled; production defaults retain automatic vault loading and the administrator-required failure latch.
