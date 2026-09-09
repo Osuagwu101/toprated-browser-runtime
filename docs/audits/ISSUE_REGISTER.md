@@ -580,4 +580,4 @@ The production API and browser worker reported healthy, the Caddy ingress served
 
 The approved external acceptance harness ran from the separate Windows network and returned `PASS` with exit code `0`. It verified health, TLS/HSTS, rejection of unsigned service access, privacy of worker control routes, real Chromium launch, restricted viewer behavior, and cleanup. Runtime secrets were not printed or committed. The initially disclosed root password was rotated successfully before closure.
 
-Owner approval was received on 2026-09-09. Phase 14 is technically green and approved, pending PR #16 promotion and authoritative exact-`main` workflow validation. Phase 15 remains NOT STARTED until this final promotion gate passes.
+Owner approval was received on 2026-09-09. PR #16 merged to `main` at `778efa353aed5c75c5f9a0ecee9d4fef42ec26c6`, and all 12 authoritative workflows passed on that exact merged commit. Phase 14 is **GREEN / COMPLETE / OWNER APPROVED**. Phase 15 remains **NOT STARTED**.
