@@ -2,85 +2,106 @@
 
 ## Phase anchor
 
-- Status: IN PROGRESS
+- Status: TECHNICALLY GREEN / OWNER APPROVED / AWAITING FINAL PROMOTION
 - Blueprint: Master Blueprint v1.1
 - Verified baseline: `main` at `fbfe54d86fa44bcd66125d38a4a9a689dcd73bf0`
+- Deployed branch head: `6cdb1fb3f167f726bb669c900fa882b2137066e1`
 - Last accepted phase: Phase 13
 - Exit gate: Standalone Contabo runtime passes external functional and health checks
+- Runtime hostname: `runtime.topratedseotools.com`
 
 ## Audit findings
 
 ### SB-014-001 — No production deployment bundle
 
 - Severity: BLOCKER
-- Evidence: the Phase 13 baseline contained portable development/CI Compose topology but no Contabo deployment, ingress, bootstrap, or external acceptance assets.
 - Underlying cause: deployment was intentionally deferred until Phase 14.
-- Blueprint impact: the Phase 14 exit gate could not be executed reproducibly.
-- Status: FIX IMPLEMENTED, UNVERIFIED.
+- Corrective action: added the production Caddy ingress, production Compose overlay, Ubuntu bootstrap, operator documentation, and external acceptance harness.
+- Status: FIXED / LIVE VERIFIED / CLOSED.
 
 ### SB-014-002 — Existing host publications are loopback-only
 
 - Severity: BLOCKER
-- Evidence: `docker-compose.yml` publishes API and worker ports only on `127.0.0.1`.
-- Underlying cause: this was the correct development and CI security boundary through Phase 13; Phase 14 requires a separate production ingress.
-- Blueprint impact: external health and viewer checks had no approved public route.
-- Status: FIX IMPLEMENTED, UNVERIFIED.
+- Underlying cause: this was the correct development/CI boundary through Phase 13, but Phase 14 required a separate public ingress.
+- Corrective action: preserved the loopback API and worker publications and added an allowlisted HTTPS Caddy ingress.
+- Status: FIXED / LIVE VERIFIED / CLOSED.
 
 ### SB-014-003 — Publishing the worker port would widen the attack surface
 
 - Severity: MAJOR
-- Evidence: the worker listener serves both `/viewer/*` and private `/browser/*` control routes.
-- Underlying cause: one private worker service intentionally owns both functions inside the Docker network.
-- Blueprint impact: direct publication would expose unnecessary authenticated control endpoints and worker health to the Internet.
-- Status: FIX IMPLEMENTED, UNVERIFIED; ingress allowlists only viewer routes.
+- Corrective action: the worker remains private; ingress exposes only approved health, signed service lifecycle, and restricted viewer routes.
+- Status: FIXED / LIVE VERIFIED / CLOSED.
 
-### SB-014-004 — Live deployment requires owner-only access and DNS actions
+### SB-014-004 — Live deployment required owner-only access and DNS actions
 
 - Severity: BLOCKER until performed.
-- Evidence: the engineering workspace has no route to arbitrary public IPs and must not receive the owner's VPS password, SSH private key, or runtime secrets.
-- Underlying cause: provider access, DNS control, and secrets are intentionally owner-controlled.
-- Blueprint impact: repository validation alone cannot satisfy the external runtime gate.
-- Status: OPEN.
+- Corrective action: the owner configured DNS, completed the first SSH connection, deployed the exact branch head, and rotated the initially disclosed root password. No password, SSH private key, or runtime secret was committed.
+- Status: RESOLVED / CLOSED.
 
 ### SB-014-005 — Initial readiness workflow referenced staging-only paths
 
 - Severity: MAJOR / CI blocker.
-- Evidence: run `34225639108`, job `102058965528`, failed in `Validate deployment files` because `phase14/scripts/bootstrap_ubuntu.sh` did not exist in the checkout.
-- Underlying cause: the first repository commit retained the local staging-directory prefix even though files were committed at repository-root `scripts/` and `deploy/` paths.
-- Corrective action: changed every workflow, bootstrap, and operator-document path to the exact committed repository path.
-- Status: FIXED / CLOSED. The corrected path step passed in run `34225926344` and later runs.
+- RED evidence: run `34225639108`, job `102058965528`.
+- Underlying cause: the first repository commit retained the local staging-directory prefix.
+- Corrective action: changed workflow, bootstrap, and operator-document paths to the committed repository paths.
+- Status: FIXED / CLOSED.
 
 ### SB-014-006 — Compose isolation assertion depended on display formatting
 
 - Severity: MAJOR / CI blocker.
-- Evidence: run `34225926344`, job `102059914824`, passed file validation and `docker compose ... config --quiet`, then failed the compact-string port grep in `Validate production Compose merge`.
-- Underlying cause: current Docker Compose renders published ports as structured YAML fields rather than the compact `127.0.0.1:18080` string assumed by the test.
-- Corrective action: validate Compose JSON with exact `target`, `published`, and `host_ip` assertions for API, worker, and HTTPS ingress.
-- Status: FIXED / CLOSED. The structured topology assertions passed in run `34226248226` and later runs.
+- RED evidence: run `34225926344`, job `102059914824`.
+- Underlying cause: Docker Compose rendered published ports as structured YAML rather than the compact string assumed by the test.
+- Corrective action: validate Compose JSON using exact target, published-port, and host-IP assertions.
+- Status: FIXED / CLOSED.
 
-### SB-014-007 — Secret scanner treated the documented placeholder as a secret
+### SB-014-007 — Secret scanner treated a documented placeholder as a secret
 
 - Severity: MAJOR / CI blocker.
-- Evidence: run `34226248226`, job `102060981096`, passed syntax, Compose topology, and Caddy policy validation, then matched `.env.example`'s explicit `replace-with-...` service-secret placeholder.
-- Underlying cause: the scanner classified any long assignment as secret material without excluding the repository's required placeholder-only environment template.
-- Corrective action: exclude only `.env.example` and this workflow's synthetic test fixture while continuing to scan all other tracked files for private keys and long service-secret assignments.
-- Status: FIXED / CLOSED. Run `34226542046` completed the full readiness workflow successfully.
+- RED evidence: run `34226248226`, job `102060981096`.
+- Corrective action: exclude only the required placeholder template and synthetic fixture while retaining scanning for real tracked secrets.
+- Status: FIXED / CLOSED.
 
 ### SB-014-008 — Inherited workflows omitted the Phase 14 branch trigger
 
 - Severity: MAJOR / regression-gate blocker.
-- Evidence: after draft PR #16 opened at `f7fed4361bee77138d5e9e50aa60449dfbb6a3c3`, only Phase 14 readiness executed; the ten inherited workflow files listed earlier phase branches explicitly and did not include `phase14-contabo-deployment`.
-- Underlying cause: branch triggers require manual extension for each phase branch.
-- Corrective action: add `phase14-contabo-deployment` to every inherited workflow without changing any test command or acceptance criterion.
-- Status: FIX IMPLEMENTED, IN TEST.
+- Corrective action: added `phase14-contabo-deployment` to every inherited workflow without weakening any test.
+- Status: FIXED / VERIFIED / CLOSED.
 
-## Verification required
+## Live deployment evidence — 2026-09-09
 
-- Deployment bundle static/config validation.
-- Production container build and local health/security regression.
-- All inherited Phase 1–13 workflows on the exact branch head.
-- Owner-controlled first SSH/key hardening and DNS configuration.
-- Live external acceptance from outside the VPS network, including real Chromium creation, restricted viewer use, negative authorization checks, and cleanup.
-- Exact merged `main` validation after owner approval.
+- Ubuntu VPS reachable through owner-controlled SSH.
+- Docker `29.1.3`, Docker Compose `2.40.3`, and Git `2.43.0` installed; Docker service active.
+- Exact deployment source observed at `6cdb1fb3f167f726bb669c900fa882b2137066e1`.
+- Bootstrap generated mode-0600 external secrets, enabled UFW, and exposed only SSH, HTTP, and HTTPS.
+- API and browser-worker containers reported healthy; ingress and lifecycle reaper were running.
+- `https://runtime.topratedseotools.com/api/health` returned `status: ok` both from the VPS and from the owner's separate Windows network.
+- The approved `scripts/phase14-external-acceptance.py` harness ran from that external Windows network and returned `result: PASS`, exit code `0`.
+- Passed checks: health, TLS/HSTS, unsigned API rejection, worker-control privacy, real Chromium creation with restricted viewer, and exact cleanup.
+- The runtime service secret was transferred only over SSH into process memory, removed after the test, and was not printed.
+- The initially disclosed root password was replaced successfully before closure.
+- Owner explicitly approved Phase 14 closure on 2026-09-09.
 
-No production Browser Use integration is part of Phase 14.
+## Invariants
+
+1. Production Browser Use default untouched — PASS.
+2. Standalone repository/deployment boundary — PASS.
+3. Generic runtime core — PASS.
+4. No writer access to privileged material — PASS.
+5. No writer-facing raw CDP/DevTools or host escape — PASS.
+6. Portable Linux/Docker implementation — PASS.
+7. Fixed-cost VPS architecture — PASS.
+8. No secrets in ordinary logs or source — PASS.
+9. Spending sequence respected — PASS.
+10. Per-writer/session Chromium isolation — PASS via inherited Phase 5 regression.
+11. Renewable active-session lifecycle — PASS via inherited Phase 6 regression.
+12. Abandoned/orphan cleanup — PASS via inherited Phase 6 regression and live cleanup.
+13. Configurable concurrency retained — PASS; empirical ceiling remains Phase 18.
+14. Provider rollback — N/A, future Phase 15/19.
+
+## Verification status
+
+- Repository readiness and inherited exact-head CI: PASS on the deployed source head.
+- Live external acceptance: PASS.
+- Owner approval: RECEIVED.
+- Remaining action: promote through PR #16 and require authoritative workflows to pass on the resulting `main` commit.
+- Phase 15 remains NOT STARTED.
