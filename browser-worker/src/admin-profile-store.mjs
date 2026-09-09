@@ -3,7 +3,14 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from
 import { isAbsolute, join, resolve } from 'node:path';
 
 const PROFILE_SLUG = /^[A-Za-z0-9._-]{1,191}$/;
-const TRANSIENT_SINGLETON_FILES = new Set(['SingletonCookie', 'SingletonLock', 'SingletonSocket']);
+const TRANSIENT_RUNTIME_FILES = new Set(['DevToolsActivePort', 'SingletonCookie', 'SingletonLock', 'SingletonSocket']);
+
+function removeTransientRuntimeFiles(userDataDir) {
+  if (!existsSync(userDataDir)) return;
+  for (const name of readdirSync(userDataDir)) {
+    if (TRANSIENT_RUNTIME_FILES.has(name)) rmSync(join(userDataDir, name), { force: true, recursive: true });
+  }
+}
 
 function fail(message, statusCode = 422, code = 'ADMIN_PROFILE_INVALID') {
   throw Object.assign(new Error(message), { statusCode, code });
@@ -49,6 +56,7 @@ export class AdminProfileStore {
     const profileStat = lstatSync(userDataDir);
     if (!profileStat.isDirectory() || profileStat.isSymbolicLink()) fail('Administrator profile path is invalid.', 503, 'ADMIN_PROFILE_CONFIG_INVALID');
     chmodSync(userDataDir, 0o700);
+    removeTransientRuntimeFiles(userDataDir);
     this.activeProfiles.set(profileId, owner);
     return { profileId, userDataDir };
   }
@@ -58,11 +66,7 @@ export class AdminProfileStore {
     const owner = String(ownerId || '');
     if (!key || this.activeProfiles.get(key) !== owner) return false;
     const userDataDir = join(this.root, key);
-    if (existsSync(userDataDir)) {
-      for (const name of readdirSync(userDataDir)) {
-        if (TRANSIENT_SINGLETON_FILES.has(name)) rmSync(join(userDataDir, name), { force: true, recursive: true });
-      }
-    }
+    removeTransientRuntimeFiles(userDataDir);
     this.activeProfiles.delete(key);
     return true;
   }

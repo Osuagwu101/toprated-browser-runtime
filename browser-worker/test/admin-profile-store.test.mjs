@@ -21,7 +21,7 @@ test('requires a bounded absolute administrator profile root', () => {
   assert.throws(() => normalizeAdminProfileRoot('/var/lib'), /too broad/);
 });
 
-test('persists profiles, excludes concurrent use, and removes only singleton residue', () => {
+test('persists profiles, excludes concurrent use, and removes only Chromium runtime residue', () => {
   const root = mkdtempSync(join(tmpdir(), 'toprated-admin-store-test-'));
   try {
     chmodSync(root, 0o755);
@@ -30,6 +30,7 @@ test('persists profiles, excludes concurrent use, and removes only singleton res
     assert.equal(statSync(root).mode & 0o777, 0o700);
     assert.equal(statSync(acquired.userDataDir).mode & 0o777, 0o700);
     writeFileSync(join(acquired.userDataDir, 'persistent-marker'), 'retained');
+    writeFileSync(join(acquired.userDataDir, 'DevToolsActivePort'), '49152\n/devtools/browser/stale');
     mkdirSync(join(acquired.userDataDir, 'SingletonSocket'));
     assert.throws(() => store.acquire('configured-tool', 'session-two'), (error) => error.code === 'ADMIN_PROFILE_IN_USE');
     assert.equal(store.release(acquired.profileId, 'wrong-owner'), false);
@@ -37,7 +38,15 @@ test('persists profiles, excludes concurrent use, and removes only singleton res
     assert.equal(store.summary().activeCount, 0);
     assert.equal(store.summary().persistedCount, 1);
     assert.doesNotThrow(() => statSync(join(acquired.userDataDir, 'persistent-marker')));
+    assert.throws(() => statSync(join(acquired.userDataDir, 'DevToolsActivePort')));
     assert.throws(() => statSync(join(acquired.userDataDir, 'SingletonSocket')));
+
+    // A worker crash cannot call release. The next process must still discard
+    // stale runtime coordination files before launching Chromium.
+    writeFileSync(join(acquired.userDataDir, 'DevToolsActivePort'), '49153\n/devtools/browser/stale');
+    const afterRestart = new AdminProfileStore({ root }).acquire('configured-tool', 'session-after-restart');
+    assert.throws(() => statSync(join(afterRestart.userDataDir, 'DevToolsActivePort')));
+    assert.doesNotThrow(() => statSync(join(afterRestart.userDataDir, 'persistent-marker')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
