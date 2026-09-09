@@ -190,7 +190,9 @@ assert code == 200 and explicitly_closed['terminationReason'] == 'explicit_close
 
 # 2) Reconnect within disconnect grace refreshes heartbeat and keeps the exact browser/PID alive.
 reconnect, reconnect_worker, reconnect_pid = create_session('phase6-reconnect')
-pre_reconnect_age = max(1, DISCONNECT_SECONDS - 2)
+# Leave enough scheduling margin for the active one-second reaper on loaded CI runners.
+# The record remains deliberately aged and strictly inside the configured grace window.
+pre_reconnect_age = max(1, DISCONNECT_SECONDS - 10)
 db_update(reconnect['sessionId'], f"last_heartbeat_at=datetime('now','-{pre_reconnect_age} seconds'), last_activity_at=datetime('now'), lease_expires_at=datetime('now','+60 seconds')")
 pre_reconnect = db_row(reconnect['sessionId'])
 code, fresh_grant = signed('POST', f"/api/sessions/{reconnect['sessionId']}/viewer-grant", 'phase6-reconnect', {})
