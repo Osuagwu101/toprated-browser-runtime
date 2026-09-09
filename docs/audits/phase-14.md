@@ -67,6 +67,16 @@
 - Corrective action: added `phase14-contabo-deployment` to every inherited workflow without weakening any test.
 - Status: FIXED / VERIFIED / CLOSED.
 
+### SB-014-009 — Final completion-ledger Phase 10 composite exposed reconnect test timing race
+
+- Severity: MAJOR / inherited-regression blocker.
+- RED evidence: final-ledger run `34417335128`, job `102685005693`, step `Preserve Phase 6 lifecycle and restart regression`.
+- Observed symptom: the reconnect fixture received HTTP 409 `SESSION_NOT_ACTIVE` while requesting a fresh viewer grant.
+- Underlying cause: the test aged the heartbeat to only two seconds inside the disconnect boundary while the one-second autonomous reaper was active. Scheduling load could consume that margin before the reconnect call.
+- Corrective action: retain the deliberately aged reconnect case but use a ten-second scheduling margin inside the same configured grace window.
+- Security/lifecycle effect: no production timeout, reaper policy, assertion, or runtime behavior was weakened.
+- Status: FIXED / FINAL EXACT-HEAD VERIFICATION REQUIRED.
+
 ## Live deployment evidence — 2026-09-09
 
 - Ubuntu VPS reachable through owner-controlled SSH.
