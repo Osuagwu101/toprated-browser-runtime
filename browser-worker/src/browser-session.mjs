@@ -374,9 +374,20 @@ export class BrowserSessionController {
   async cleanupSession(session) {
     const rootPid = session.process.pid;
     const trackedPids = [...new Set([...collectProcessTree(rootPid), ...collectProcessGroup(rootPid)])];
+    let rootExited = false;
+    if (!session.deleteUserDataDirOnStop) {
+      // Chromium persists cookies and other profile databases during its normal
+      // shutdown sequence. Give durable administrator profiles that clean close
+      // before falling back to the bounded process-group cleanup below.
+      try { await session.cdp.send('Browser.close', {}, 5000); } catch {}
+      rootExited = await waitForExit(session.process, 5000);
+    }
     session.cdp.close();
-    if (!killProcessGroup(rootPid, 'SIGTERM')) { try { session.process.kill('SIGTERM'); } catch {} }
-    let rootExited = await waitForExit(session.process, 5000); let groupPids = collectProcessGroup(rootPid);
+    if (!rootExited) {
+      if (!killProcessGroup(rootPid, 'SIGTERM')) { try { session.process.kill('SIGTERM'); } catch {} }
+      rootExited = await waitForExit(session.process, 5000);
+    }
+    let groupPids = collectProcessGroup(rootPid);
     if (!rootExited || groupPids.length) { if (!killProcessGroup(rootPid, 'SIGKILL')) { try { session.process.kill('SIGKILL'); } catch {} } rootExited = await waitForExit(session.process, 2000); }
     await sleep(250); groupPids = collectProcessGroup(rootPid);
     let orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
