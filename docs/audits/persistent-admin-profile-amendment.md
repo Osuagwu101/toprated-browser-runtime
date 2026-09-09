@@ -46,7 +46,8 @@ This intentionally keeps two different persistence mechanisms. The durable Chrom
 - Admin profile paths, raw approved state, cookies, storage and worker control data are absent from writer/operator responses and normal logs.
 - Writer tool profiles marked `audience: operator` fail through the signed service API.
 - The worker keeps loopback-only dynamic CDP and the restricted frame/input viewer.
-- A persistent profile is released only after Chromium and its process group are proven stopped; incomplete cleanup keeps the profile unavailable.
+- A persistent profile requests Chromium's normal browser close so profile databases are flushed, then uses the bounded process-group fallback; it is released only after Chromium and its process group are proven stopped.
+- Stale Chromium runtime coordination files (`DevToolsActivePort` and `Singleton*`) are removed on acquire/release without deleting browser identity data.
 - Proof and writer browsers never use the persistent admin `user-data-dir`.
 
 ## Migration and rollback
@@ -73,3 +74,11 @@ Rollback requires stopping the runtime first. The schema migration can be rolled
 10. proof/writer cleanup leaves zero active sessions and zero temporary profile residue while retaining exactly one durable admin profile.
 
 The workflow separately inspects the database ciphertext, filesystem permissions, runtime logs, durable terminal records, and final worker inventory. This amendment is not complete until exact-head CI evidence is green; it does not advance or close Phase 14.
+
+## Execution evidence
+
+- Remote implementation head `33d8717b840f90f0966c678a0e7b48cfc97de40f`, run `34321452362`: **failed** after worker restart because the durable profile retained a stale `DevToolsActivePort`. The profile store now removes that runtime-only file on both acquire and release.
+- Repair head `c01f1e709c2baee7179b0f6c9ee127cca3801e5a`, run `34321755765`: **failed** because forced Chromium termination preserved IndexedDB but did not reliably flush the authentication cookie. Durable admin sessions now request `Browser.close` and wait before the existing TERM/KILL fallback.
+- Repaired implementation head `67376191f9a90bc571234ef3e94bbdda63fc3f2e`, run `34322037549`: **passed** all workflow steps. Evidence included 27/27 worker tests, first-run administrator interaction, profile reuse after worker restart without another login interaction, expiry/reapproval recovery, encrypted vault version 3, concurrent writer isolation, zero open/temporary sessions, one `0700` persistent profile, and no sensitive log markers.
+
+This deterministic gate uses a controlled authentication provider fixture. It proves the runtime lifecycle and isolation contract, but it cannot guarantee that an external provider such as Cloudflare will never issue a new challenge. Provider-controlled challenges remain an administrator-only event and must be validated with the live-account harness in the deployment environment.
