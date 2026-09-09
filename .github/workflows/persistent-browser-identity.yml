@@ -1,0 +1,133 @@
+name: Persistent Browser Identity
+
+on:
+  push:
+    branches:
+      - persistent-browser-identity
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  BROWSER_IDENTITY_ENCRYPTION_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+  VIEWER_SIGNING_SECRET: identity-ci-viewer-signing-secret-not-for-production-0123456789abcdef
+  RUNTIME_SERVICE_AUTH_SECRET: identity-ci-service-auth-secret-not-for-production-0123456789abcdef
+  RUNTIME_OPERATOR_AUTH_SECRET: identity-ci-operator-secret-not-for-production-0123456789abcdef
+  WORKER_CONTROL_SECRET: identity-ci-worker-control-secret-not-for-production-0123456789abcdef
+  VIEWER_PUBLIC_BASE_URL: http://127.0.0.1:18081
+  MAX_BROWSER_SESSIONS: 3
+  SESSION_LEASE_SECONDS: 180
+  SESSION_IDLE_TIMEOUT_SECONDS: 120
+  SESSION_DISCONNECT_GRACE_SECONDS: 90
+  SESSION_STARTUP_GRACE_SECONDS: 5
+  SESSION_REAPER_INTERVAL_SECONDS: 1
+  BROWSER_STATE_MAX_BYTES: 262144
+  ALLOW_LEGACY_BROWSER_STATE_INPUT: false
+  ALLOW_LEGACY_AUTH_RESTORE: false
+
+jobs:
+  persistent-browser-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Static and unit gates
+        run: |
+          set -euo pipefail
+          bash scripts/typecheck.sh
+          node --test browser-worker/test/*.test.mjs
+          grep -F 'BROWSER_IDENTITY_ENCRYPTION_KEY' .env.example docker-compose.yml api/config/browser.php scripts/phase14-bootstrap-ubuntu.sh
+          grep -F 'BROWSER_STATE_INPUT_FORBIDDEN' api/app/Http/Controllers/SessionController.php tests/persistent-browser-identity-e2e.py
+          grep -F 'ADMIN_REAUTH_SESSION_REQUIRED' api/app/Http/Controllers/ToolAuthController.php tests/persistent-browser-identity-e2e.py
+          if grep -R --line-number -E '0\.0\.0\.0:9222|:9222:|remote-debugging-address=0\.0\.0\.0' browser-worker api docker-compose.yml; then
+            echo 'Unsafe raw CDP exposure pattern found.' >&2
+            exit 1
+          fi
+
+      - name: Build and boot runtime
+        run: |
+          docker compose build
+          docker compose up -d api browser-worker
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/tmp/identity-health.json; then break; fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          h=json.load(open('/tmp/identity-health.json'))
+          assert h['status']=='ok', h
+          assert h['browser_state']['persistence']=='encrypted-at-rest', h
+          assert h['browser_state']['writerStateInputAccepted'] is False, h
+          assert h['browser_state']['encryption']=='AES-256-GCM', h
+          PY
+
+      - name: Start administrator authentication fixture
+        run: |
+          docker compose exec -d browser-worker node /srv/browser-worker/test/auth-state-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Capture identities and launch without writer state
+        run: python3 tests/persistent-browser-identity-e2e.py bootstrap
+
+      - name: Verify encrypted durable storage
+        run: |
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $rows=$db->query("select tool_slug, encrypted_payload, payload_fingerprint, version from tool_browser_identities order by tool_slug")->fetchAll(PDO::FETCH_ASSOC);
+            if (count($rows)!==2) { fwrite(STDERR,"identity_count=".count($rows).PHP_EOL); exit(1); }
+            foreach ($rows as $row) {
+              if ((int)$row["version"]!==1 || strlen($row["payload_fingerprint"])!==64) exit(1);
+              foreach (["phase8-auth","shared-state-local","shared-state-session"] as $secret) {
+                if (str_contains($row["encrypted_payload"],$secret)) { fwrite(STDERR,"plaintext_identity_found".PHP_EOL); exit(1); }
+              }
+            }
+            echo "encrypted_identities=2\n";
+          '
+
+      - name: Restart recovery
+        run: |
+          docker compose restart api browser-worker
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18080/api/health >/dev/null; then break; fi
+            sleep 2
+          done
+          docker compose exec -d browser-worker node /srv/browser-worker/test/auth-state-fixture.mjs
+          for i in $(seq 1 20); do
+            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then break; fi
+            sleep 1
+          done
+          python3 tests/persistent-browser-identity-e2e.py after-restart
+
+      - name: Expiration and administrator reapproval
+        run: python3 tests/persistent-browser-identity-e2e.py expiration-recovery
+
+      - name: Verify isolation cleanup and secret-free logs
+        run: |
+          docker compose logs --no-color api browser-worker >/tmp/identity-runtime.log
+          for marker in 'shared-state-local' 'shared-state-session' 'must-not-enter-writer-api'; do
+            if grep -F "$marker" /tmp/identity-runtime.log; then exit 1; fi
+          done
+          docker compose exec -T browser-worker node - <<'NODE'
+          const fs=require('node:fs');
+          const profiles=fs.readdirSync('/tmp').filter((name)=>name.startsWith('toprated-browser-'));
+          if (profiles.length) { console.error(profiles); process.exit(1); }
+          NODE
+          docker compose exec -T api php -r '
+            $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
+            $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
+            if ((int)$open!==0) exit(1);
+          '
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans

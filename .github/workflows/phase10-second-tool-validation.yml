@@ -3,6 +3,7 @@ name: Phase 10 Second-Tool Validation
 on:
   push:
     branches:
+      - persistent-browser-identity
       - phase14-contabo-deployment
       - phase13-vps-selection
       - phase12-performance-testing
@@ -18,6 +19,7 @@ permissions:
 
 env:
   APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  BROWSER_IDENTITY_ENCRYPTION_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
   VIEWER_SIGNING_SECRET: phase10-ci-viewer-signing-secret-not-for-production-0123456789abcdef
   VIEWER_TOKEN_TTL_SECONDS: 300
   RUNTIME_SERVICE_AUTH_SECRET: phase10-ci-service-auth-secret-not-for-production-0123456789abcdef
@@ -32,6 +34,8 @@ env:
   SESSION_STARTUP_GRACE_SECONDS: 5
   SESSION_REAPER_INTERVAL_SECONDS: 1
   BROWSER_STATE_MAX_BYTES: 262144
+  ALLOW_LEGACY_BROWSER_STATE_INPUT: true
+  ALLOW_LEGACY_AUTH_RESTORE: true
   BROWSER_DISPLAY_MODE: virtual-display
   TOOL_PROFILES_PATH: /srv/runtime-api/config/tool-profiles.phase10-ci.json
 
@@ -90,9 +94,11 @@ jobs:
           }
 
           stealth['launch_url'] = 'http://127.0.0.1:19093/stealthwriter/dashboard'
+          stealth['admin_login_url'] = 'http://127.0.0.1:19093/stealthwriter/login'
           stealth['browser_state']['allowed_hosts'] = ['127.0.0.1']
 
           chatgpt['launch_url'] = 'http://127.0.0.1:19093/chatgpt/'
+          chatgpt['admin_login_url'] = 'http://127.0.0.1:19093/chatgpt/'
           chatgpt['browser_state']['allowed_hosts'] = ['127.0.0.1']
 
           # Clone the same policies under deliberately non-vendor slugs. Running the

@@ -30,6 +30,7 @@ if [[ ! -f .env ]]; then
   worker_secret="$(openssl rand -hex 32)"
   service_secret="$(openssl rand -hex 32)"
   operator_secret="$(openssl rand -hex 32)"
+  identity_key="$(openssl rand -base64 32 | tr -d '\n')"
   viewer_secret="$(openssl rand -hex 32)"
   cat > .env <<EOF
 APP_ENV=production
@@ -41,6 +42,9 @@ VIEWER_PUBLIC_BASE_URL=https://${RUNTIME_DOMAIN}
 WORKER_CONTROL_SECRET=${worker_secret}
 RUNTIME_SERVICE_AUTH_SECRET=${service_secret}
 RUNTIME_OPERATOR_AUTH_SECRET=${operator_secret}
+BROWSER_IDENTITY_ENCRYPTION_KEY=${identity_key}
+ALLOW_LEGACY_BROWSER_STATE_INPUT=false
+ALLOW_LEGACY_AUTH_RESTORE=false
 VIEWER_SIGNING_SECRET=${viewer_secret}
 MAX_BROWSER_SESSIONS=3
 LOG_LEVEL=info

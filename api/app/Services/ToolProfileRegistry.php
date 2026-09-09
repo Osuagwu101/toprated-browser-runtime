@@ -35,6 +35,7 @@ final class ToolProfileRegistry
             'launchUrl' => $launchUrl,
             'browserState' => $profile['browser_state'],
             'authentication' => $profile['authentication'],
+            'adminLoginUrl' => $profile['admin_login_url'],
         ];
     }
 
@@ -99,7 +100,7 @@ final class ToolProfileRegistry
             if (! is_array($profile) || array_is_list($profile)) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile entries must be objects.');
             }
-            $unexpected = array_diff(array_keys($profile), ['enabled', 'launch_url', 'browser_state', 'authentication']);
+            $unexpected = array_diff(array_keys($profile), ['enabled', 'launch_url', 'admin_login_url', 'browser_state', 'authentication']);
             if ($unexpected !== []) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile contains unsupported fields.');
             }
@@ -117,15 +118,39 @@ final class ToolProfileRegistry
             }
             $this->assertLaunchUrl($validationUrl);
 
+            $adminLoginUrl = $profile['admin_login_url'] ?? $validationUrl;
+            if (! is_string($adminLoginUrl) || trim($adminLoginUrl) === '' || strlen($adminLoginUrl) > 8192) {
+                throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile administrator login URL must be a bounded non-empty string.');
+            }
+            $adminLoginUrl = trim($adminLoginUrl);
+            if (str_contains($adminLoginUrl, '{writer_id}') || preg_match('/\{[A-Za-z0-9_]+\}/', $adminLoginUrl)) {
+                throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Tool profile administrator login URL must not contain placeholders.');
+            }
+            $this->assertLaunchUrl($adminLoginUrl);
+
             $browserState = $this->validateBrowserStatePolicy($profile['browser_state'] ?? null, $validationUrl);
             $authentication = $this->validateAuthenticationPolicy($profile['authentication'] ?? null);
             if ($authentication['required'] && ! $browserState['required']) {
                 throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Authenticated tool profiles must require authorized browser state.');
             }
+            if ($authentication['required']) {
+                $adminHost = strtolower((string) parse_url($adminLoginUrl, PHP_URL_HOST));
+                $adminAllowed = false;
+                foreach ($browserState['allowedHosts'] as $allowedHost) {
+                    if ($this->hostMatches($adminHost, $allowedHost)) {
+                        $adminAllowed = true;
+                        break;
+                    }
+                }
+                if (! $adminAllowed) {
+                    throw new RuntimeApiException('TOOL_PROFILE_CONFIG_INVALID', 503, 'Administrator login host is outside browser_state.allowed_hosts.');
+                }
+            }
 
             $validated[$slug] = [
                 'enabled' => $profile['enabled'],
                 'launch_url' => $template,
+                'admin_login_url' => $adminLoginUrl,
                 'browser_state' => $browserState,
                 'authentication' => $authentication,
             ];

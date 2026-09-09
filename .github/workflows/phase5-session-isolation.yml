@@ -3,6 +3,7 @@ name: Phase 5 Session Isolation
 on:
   push:
     branches:
+      - persistent-browser-identity
       - phase14-contabo-deployment
       - phase13-vps-selection
       - phase12-performance-testing
@@ -21,6 +22,7 @@ permissions:
 
 env:
   APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  BROWSER_IDENTITY_ENCRYPTION_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
   VIEWER_SIGNING_SECRET: phase5-ci-viewer-signing-secret-not-for-production-0123456789abcdef
   VIEWER_TOKEN_TTL_SECONDS: 300
   RUNTIME_SERVICE_AUTH_SECRET: phase5-ci-service-auth-secret-not-for-production-0123456789abcdef

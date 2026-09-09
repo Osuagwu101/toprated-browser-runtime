@@ -18,6 +18,28 @@
   "generic-phase8-state": {
     "enabled": true,
     "launch_url": "http://127.0.0.1:19091/dashboard",
+    "admin_login_url": "http://127.0.0.1:19091/admin-login",
+    "browser_state": {
+      "required": true,
+      "allowed_hosts": [
+        "127.0.0.1"
+      ]
+    },
+    "authentication": {
+      "required": true,
+      "url_contains_any": [
+        "/dashboard"
+      ],
+      "selectors_any": [
+        "[data-phase8-authenticated=\"true\"]"
+      ],
+      "timeout_seconds": 5
+    }
+  },
+  "generic-persistent-second": {
+    "enabled": true,
+    "launch_url": "http://127.0.0.1:19091/dashboard",
+    "admin_login_url": "http://127.0.0.1:19091/admin-login",
     "browser_state": {
       "required": true,
       "allowed_hosts": [
@@ -38,6 +60,7 @@
   "phrasly": {
     "enabled": true,
     "launch_url": "https://phrasly.ai/dashboard",
+    "admin_login_url": "https://phrasly.ai/login",
     "browser_state": {
       "required": true,
       "allowed_hosts": [
@@ -83,6 +106,7 @@
   "stealthwriter": {
     "enabled": true,
     "launch_url": "https://stealthwriter.ai/dashboard",
+    "admin_login_url": "https://stealthwriter.ai/login",
     "browser_state": {
       "required": true,
       "allowed_hosts": [
