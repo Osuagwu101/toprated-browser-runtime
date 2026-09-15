@@ -163,6 +163,32 @@ function collectProcessGroup(groupId) {
 function killProcessGroup(groupId, signal) { try { process.kill(-groupId, signal); return true; } catch { return false; } }
 async function waitForExit(processRef, timeoutMs) { if (processRef.exitCode !== null || processRef.signalCode !== null) return true; return new Promise((resolve) => { const timer = setTimeout(() => resolve(false), timeoutMs); processRef.once('exit', () => { clearTimeout(timer); resolve(true); }); }); }
 
+async function safeAuthenticationFailureContext(cdp, policyInput = {}) {
+  try {
+    const policy = policyInput && typeof policyInput === 'object' ? policyInput : {};
+    const result = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const selectors=${JSON.stringify(Array.isArray(policy.selectorsAny) ? policy.selectorsAny : [])};
+        const needles=${JSON.stringify(Array.isArray(policy.urlContainsAny) ? policy.urlContainsAny : [])};
+        const href=String(location.href||'');
+        return {
+          url: href.slice(0, 2048),
+          title: String(document.title||'').slice(0, 256),
+          urlMatched: !needles.length || needles.some((needle)=>href.includes(needle)),
+          selectorMatched: !selectors.length || selectors.some((selector)=>{try{return !!document.querySelector(selector)}catch{return false}}),
+        };
+      })()`,
+      returnByValue: true,
+    }, 3000);
+    const value = result?.result?.value;
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : { unavailable: true };
+  } catch {
+    return { unavailable: true };
+  }
+}
+
 export class BrowserSessionController {
   constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SUPPORTED_BROWSER_SESSIONS) throw new Error(`MAX_BROWSER_SESSIONS must be an integer between 1 and ${MAX_SUPPORTED_BROWSER_SESSIONS}.`);
@@ -256,6 +282,7 @@ export class BrowserSessionController {
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
     let failureStage = 'cdp-port';
+    let authenticationFailureContext = null;
     try {
       const port = await waitForDevToolsPort(userDataDir, browserProcess);
       failureStage = 'cdp-target';
@@ -291,7 +318,13 @@ export class BrowserSessionController {
         await removeBrowserStateBootstrap(cdp, bootstrap.scriptIdentifier);
       }
       failureStage = 'authentication';
-      const authentication = await verifyAuthentication(cdp, options?.authentication || {});
+      let authentication;
+      try {
+        authentication = await verifyAuthentication(cdp, options?.authentication || {});
+      } catch (error) {
+        authenticationFailureContext = await safeAuthenticationFailureContext(cdp, options?.authentication || {});
+        throw error;
+      }
       const session = this.assertSession(sessionId);
       session.authenticationRequired = authentication.required === true;
       session.authenticationVerified = authentication.verified === true;
@@ -309,6 +342,9 @@ export class BrowserSessionController {
         stage: failureStage,
         code: safeCode,
         diagnostic: classifyBrowserLaunchError(stderr),
+        ...(failureStage === 'authentication' && authenticationFailureContext
+          ? { authenticationFailureContext }
+          : {}),
       }));
       throw wrapped;
     } finally { this.startingCount -= 1; }
