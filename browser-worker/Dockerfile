@@ -26,6 +26,8 @@ ENV CHROMIUM_EXECUTABLE=/usr/bin/google-chrome-stable
 ENV GOOGLE_CHROME_EXECUTABLE=/usr/bin/google-chrome-stable
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin browser \
+    && mkdir -p /tmp/.X11-unix \
+    && chmod 1777 /tmp/.X11-unix \
     && chown -R browser:browser /srv/browser-worker \
     && node --test test/*.test.mjs \
     && test -x /usr/bin/google-chrome-stable \
