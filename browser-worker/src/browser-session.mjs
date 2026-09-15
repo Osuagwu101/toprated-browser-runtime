@@ -117,9 +117,28 @@ async function waitForDevToolsPort(userDataDir, processRef, timeoutMs = 10000) {
   while (Date.now() < deadline) { if (processRef.exitCode !== null || processRef.signalCode !== null) throw new Error(`Chromium exited before CDP became available (code ${processRef.exitCode}, signal ${processRef.signalCode || 'none'}).`); if (existsSync(portFile)) { const [portLine] = readFileSync(portFile, 'utf8').trim().split(/\r?\n/); const port = Number(portLine); if (Number.isInteger(port) && port > 0) return port; } await sleep(50); }
   throw new Error('Chromium did not expose a CDP port in time.');
 }
-async function findPageTarget(port, timeoutMs = 5000) {
-  const deadline = Date.now() + timeoutMs; let lastError = null;
-  while (Date.now() < deadline) { try { const response = await fetch(`http://127.0.0.1:${port}/json/list`); if (!response.ok) throw new Error(`HTTP ${response.status}`); const targets = await response.json(); const page = targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl); if (page) return page; } catch (error) { lastError = error; } await sleep(50); }
+async function findPageTarget(port, timeoutMs = 5000, preferredOrigin = '') {
+  const deadline = Date.now() + timeoutMs; let lastError = null; let fallback = null;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const targets = await response.json();
+      const pages = targets.filter((target) => target.type === 'page' && target.webSocketDebuggerUrl);
+      if (pages.length) {
+        if (!fallback) fallback = pages[0];
+        if (!preferredOrigin) return pages[0];
+        const preferred = pages.find((target) => {
+          try { return new URL(String(target.url || '')).origin === preferredOrigin; } catch { return false; }
+        });
+        if (preferred) return preferred;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(100);
+  }
+  if (fallback) return fallback;
   throw new Error(`No Chromium page target became available${lastError ? `: ${lastError.message}` : '.'}`);
 }
 function collectProcessGroup(groupId) {
@@ -207,7 +226,13 @@ export class BrowserSessionController {
     }
     const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
     const preserveUserDataDir = options?.preserveUserDataDir === true;
-    const chromiumArgs = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'];
+    const restoreLastSession = options?.restoreLastSession === true;
+    const chromiumArgs = [
+      '--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter',
+      '--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
+      `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,
+      ...(restoreLastSession ? ['--restore-last-session'] : ['about:blank']),
+    ];
     const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
     const launcherArgs = this.displayMode === 'virtual-display'
       ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
@@ -219,7 +244,8 @@ export class BrowserSessionController {
     try {
       const port = await waitForDevToolsPort(userDataDir, browserProcess);
       failureStage = 'cdp-target';
-      const target = await findPageTarget(port);
+      const preferredOrigin = restoreLastSession && /^https?:/.test(safeUrl) ? new URL(safeUrl).origin : '';
+      const target = await findPageTarget(port, restoreLastSession ? 10000 : 5000, preferredOrigin);
       failureStage = 'cdp-connect';
       const cdp = new CdpClient(target.webSocketDebuggerUrl);
       await cdp.connect(); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
