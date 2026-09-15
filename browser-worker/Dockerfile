@@ -22,15 +22,15 @@ COPY browser-worker/test ./test
 
 ENV NODE_ENV=production
 ENV PORT=8081
-ENV CHROMIUM_EXECUTABLE=/usr/bin/google-chrome-stable
+ENV CHROMIUM_EXECUTABLE=/usr/bin/chromium
 ENV GOOGLE_CHROME_EXECUTABLE=/usr/bin/google-chrome-stable
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin browser \
-    && mkdir -p /tmp/.X11-unix \
+    && mkdir -p /tmp/.X11-unix /srv/interactive-auth-profiles \
     && chmod 1777 /tmp/.X11-unix \
     && chown root:root /opt/google/chrome/chrome-sandbox \
     && chmod 4755 /opt/google/chrome/chrome-sandbox \
-    && chown -R browser:browser /srv/browser-worker \
+    && chown -R browser:browser /srv/browser-worker /srv/interactive-auth-profiles \
     && node --test test/*.test.mjs \
     && test -x /usr/bin/google-chrome-stable \
     && test -x /usr/bin/chromium \
