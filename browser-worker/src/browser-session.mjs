@@ -27,6 +27,17 @@ export function normalizeBrowserNavigationTimeoutMs(value) {
   return timeout;
 }
 
+export function buildBrowserProcessEnvironment(userDataDir = '') {
+  const root = String(userDataDir || '').trim();
+  if (!root) return { ...process.env };
+  return {
+    ...process.env,
+    HOME: root,
+    XDG_CONFIG_HOME: join(root, '.config'),
+    XDG_CACHE_HOME: join(root, '.cache'),
+  };
+}
+
 export function validateNavigationUrl(value) {
   const raw = String(value || DEFAULT_TEST_URL).trim();
   let parsed;
@@ -237,7 +248,11 @@ export class BrowserSessionController {
     const launcherArgs = this.displayMode === 'virtual-display'
       ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
       : ['--headless=new', ...chromiumArgs];
-    const browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    const browserProcess = spawn(launcher, launcherArgs, {
+      env: buildBrowserProcessEnvironment(suppliedUserDataDir),
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: true,
+    });
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
     let failureStage = 'cdp-port';
