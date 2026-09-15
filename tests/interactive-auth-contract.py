@@ -6,6 +6,9 @@ server = Path("browser-worker/src/server.mjs").read_text()
 session_manager = Path("api/app/Services/SessionManager.php").read_text()
 tool_auth = Path("api/app/Http/Controllers/ToolAuthController.php").read_text()
 dockerfile = Path("browser-worker/Dockerfile").read_text()
+compose = Path("docker-compose.yml").read_text()
+interactive_server = Path("browser-worker/src/interactive-auth-server.mjs").read_text()
+interactive_client = Path("browser-worker/src/interactive-auth-client.mjs").read_text()
 
 required_manager = [
     "google-chrome-stable",
@@ -65,5 +68,36 @@ for needle in [
 ]:
     if needle not in dockerfile:
         raise SystemExit(f"browser image contract missing {needle!r}")
+
+for needle in [
+    "interactive-auth-worker:",
+    "cap_add:",
+    "- SYS_ADMIN",
+    "INTERACTIVE_AUTH_WORKER_URL: http://interactive-auth-worker:8082",
+    "interactive-auth-profiles:/srv/interactive-auth-profiles",
+]:
+    if needle not in compose:
+        raise SystemExit(f"isolated auth service contract missing {needle!r}")
+
+browser_worker_block = compose.split("  browser-worker:", 1)[1].split("\nnetworks:", 1)[0]
+if "SYS_ADMIN" in browser_worker_block:
+    raise SystemExit("writer browser worker must not receive SYS_ADMIN")
+
+for needle in [
+    "InteractiveAuthBrowserManager",
+    "/internal/sessions",
+    "automationAttachedDuringAuth: false",
+]:
+    if needle not in interactive_server:
+        raise SystemExit(f"interactive auth server contract missing {needle!r}")
+
+for needle in [
+    "INTERACTIVE_AUTH_WORKER_URL",
+    "X-Toprated-Worker-Secret",
+    "prepare(sessionId)",
+    "cleanupProfile(profileId)",
+]:
+    if needle not in interactive_client:
+        raise SystemExit(f"interactive auth client contract missing {needle!r}")
 
 print("interactive_auth_contract=pass")
