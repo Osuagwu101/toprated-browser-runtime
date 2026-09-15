@@ -61,6 +61,22 @@ async function stopProcessGroup(processRef, graceMs = 2500) {
   return !processAlive(processRef);
 }
 
+async function closeChromeGracefully(session, graceMs = 5000) {
+  const ids = chromeWindowIds(session.display, session.chrome?.pid);
+  if (ids.length) {
+    try {
+      await commandBuffer('/usr/bin/xdotool', ['windowclose', ids[ids.length - 1]], {
+        env: { ...process.env, DISPLAY: session.display },
+        timeout: 1000,
+      });
+    } catch {}
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline && processAlive(session.chrome)) await sleep(100);
+    if (!processAlive(session.chrome)) return true;
+  }
+  return stopProcessGroup(session.chrome, Math.max(1000, graceMs));
+}
+
 function chromeWindowIds(display, pid = null) {
   const search = (args) => {
     try {
@@ -392,7 +408,7 @@ export class InteractiveAuthBrowserManager {
     // watchdog does not delete the profile that is intentionally being handed
     // to the post-auth validation browser.
     this.sessions.delete(sessionId);
-    const chromeExited = await stopProcessGroup(session.chrome, 5000);
+    const chromeExited = await closeChromeGracefully(session, 5000);
     if (!chromeExited) {
       await this.cleanup(session, false);
       throw new Error('Interactive authentication Chrome did not close cleanly.');
