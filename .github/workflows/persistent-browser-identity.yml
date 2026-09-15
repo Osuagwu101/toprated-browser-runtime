@@ -94,6 +94,11 @@ jobs:
             echo "encrypted_identities=2\n";
           '
 
+      - name: Verify account-scoped identity isolation
+        run: |
+          python3 tests/persistent-browser-identity-e2e.py account-isolation
+          docker compose exec -T api php -r '$db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite"); $count=$db->query("select count(*) from tool_browser_identities where account_scope != \"legacy\"")->fetchColumn(); if ((int)$count!==2) exit(1); $db->exec("delete from tool_browser_identities where account_scope != \"legacy\""); $db->exec("delete from tool_auth_states where account_scope != \"legacy\""); echo "account_scope_isolation=pass\n";'
+
       - name: Restart recovery
         run: |
           docker compose restart api browser-worker
