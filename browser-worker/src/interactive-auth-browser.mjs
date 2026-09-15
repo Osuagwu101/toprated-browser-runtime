@@ -77,7 +77,6 @@ export function buildInteractiveChromeArgs({ userDataDir, url }) {
   return [
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-crash-reporter',
     `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,
     `--user-data-dir=${userDataDir}`,
     url,
