@@ -345,14 +345,14 @@ export class InteractiveAuthBrowserManager {
     const session = this.assertSession(sessionId);
     const input = validateViewerInput(rawInput);
     const env = { ...process.env, DISPLAY: session.display };
-    const run = (args) => commandBuffer('/usr/bin/xdotool', args, { env });
+    const run = (args, timeout = 1500) => commandBuffer('/usr/bin/xdotool', args, { env, timeout });
     const windowIds = chromeWindowIds(session.display, session.chrome.pid);
     if (windowIds.length) {
-      try { await run(['windowfocus', '--sync', windowIds[windowIds.length - 1]]); } catch {}
+      try { await run(['windowfocus', windowIds[windowIds.length - 1]], 750); } catch {}
     }
 
     if (input.type === 'mouse') {
-      await run(['mousemove', '--sync', String(Math.round(input.x)), String(Math.round(input.y))]);
+      await run(['mousemove', String(Math.round(input.x)), String(Math.round(input.y))]);
       if (input.event === 'pressed') await run(['mousedown', input.button === 'right' ? '3' : input.button === 'middle' ? '2' : '1']);
       if (input.event === 'released') await run(['mouseup', input.button === 'right' ? '3' : input.button === 'middle' ? '2' : '1']);
     } else if (input.type === 'scroll') {
