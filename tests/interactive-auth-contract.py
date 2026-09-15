@@ -42,9 +42,9 @@ required_server = [
     "finalize-authentication",
     "interactiveAuth.frame(sessionId)",
     "interactiveAuth.input(sessionId, body)",
-    "interactiveAuth.prepare(sessionId)",
-    "profileValidationController.start",
-    "interactiveAuth.cleanupProfile(profileId)",
+    "interactiveAuth.finalize(sessionId",
+    "finalizingInteractiveSessions.set",
+    "validationLocation",
 ]
 for needle in required_server:
     if needle not in server:
@@ -93,7 +93,11 @@ if "interactive-auth-control" not in browser_worker_block:
 
 for needle in [
     "InteractiveAuthBrowserManager",
+    "BrowserSessionController",
     "/internal/sessions",
+    "action === 'finalize'",
+    "validationController.start",
+    "validationController.exportAuthorizedState",
     "automationAttachedDuringAuth: false",
 ]:
     if needle not in interactive_server:
@@ -103,6 +107,7 @@ for needle in [
     "INTERACTIVE_AUTH_WORKER_URL",
     "X-Toprated-Worker-Secret",
     "prepare(sessionId)",
+    "finalize(sessionId, body)",
     "cleanupProfile(profileId)",
 ]:
     if needle not in interactive_client:
