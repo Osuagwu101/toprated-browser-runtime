@@ -13,7 +13,7 @@
         reverse_proxy api:8080
     }
 
-    @service path /api/capacity /api/sessions /api/sessions/*
+    @service path /api/capacity /api/sessions /api/sessions/* /api/tool-auth/*
     handle @service {
         reverse_proxy api:8080
     }
