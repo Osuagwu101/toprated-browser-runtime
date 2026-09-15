@@ -80,6 +80,22 @@ def approve_identity(tool, through_service=False, account_id=None):
     session_id = started["sessionId"]
     viewer_url, token, payload = decode_grant(started["viewerGrant"])
 
+    # The interactive auth worker returns as soon as the native Chrome window
+    # exists. Wait for the login fixture itself to finish loading before
+    # sending the synthetic human click; otherwise CI can race Chrome startup
+    # and click the browser chrome/blank content area instead of the page.
+    login_status = None
+    for _ in range(50):
+        code, status = viewer("GET", viewer_url, token, "/status")
+        login_status = {"code": code, "status": status}
+        if code == 200 and "ADMIN_LOGIN" in status.get("title", ""):
+            break
+        time.sleep(0.2)
+    else:
+        raise AssertionError(
+            f"administrator login fixture never became ready: {login_status}"
+        )
+
     for event in ("pressed", "released"):
         code, accepted = viewer("POST", viewer_url, token, "/input", {
             "type": "mouse", "event": event, "button": "left", "x": 230, "y": 220,
@@ -87,7 +103,7 @@ def approve_identity(tool, through_service=False, account_id=None):
         assert code == 200 and accepted["inputAccepted"] is True, (code, accepted)
 
     last_status = None
-    for _ in range(30):
+    for _ in range(50):
         code, status = viewer("GET", viewer_url, token, "/status")
         last_status = {"code": code, "status": status}
         if code == 200 and (
