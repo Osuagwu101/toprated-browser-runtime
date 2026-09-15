@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
@@ -164,13 +164,11 @@ export class InteractiveAuthBrowserManager {
     xvfbExecutable = process.env.XVFB_EXECUTABLE || '/usr/bin/Xvfb',
     profileRoot = process.env.AUTH_BROWSER_PROFILE_ROOT || tmpdir(),
     maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3),
-    automationController,
   } = {}) {
     this.chromeExecutable = chromeExecutable;
     this.xvfbExecutable = xvfbExecutable;
     this.profileRoot = profileRoot;
     this.maxSessions = maxSessions;
-    this.automationController = automationController;
     this.sessions = new Map();
     this.startingCount = 0;
   }
@@ -250,8 +248,8 @@ export class InteractiveAuthBrowserManager {
     const sessionId = randomUUID();
     const display = this.allocateDisplay();
     const chromeVersion = readChromeVersion(this.chromeExecutable);
-    const profilePrefix = join(this.profileRoot, 'toprated-auth-');
-    const userDataDir = mkdtempSync(profilePrefix);
+    const userDataDir = this.profilePath(sessionId);
+    mkdirSync(userDataDir, { recursive: false, mode: 0o700 });
     const xvfb = spawn(this.xvfbExecutable, [display, '-screen', '0', `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, '-nolisten', 'tcp', '-noreset'], {
       stdio: ['ignore', 'ignore', 'pipe'],
       detached: true,
@@ -373,54 +371,44 @@ export class InteractiveAuthBrowserManager {
     return { accepted: true };
   }
 
-  async finalize(sessionId, { authentication, browserStatePolicy, launchUrl }) {
-    if (!this.automationController) throw new Error('Interactive authentication finalization is not configured.');
-    const session = this.assertSession(sessionId);
+  profilePath(profileId) {
+    const id = String(profileId || '');
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      throw Object.assign(new Error('Interactive authentication profile identifier is invalid.'), { statusCode: 400 });
+    }
+    return join(this.profileRoot, id);
+  }
 
-    // Authentication is intentionally human-only until this point. Chrome is
-    // closed cleanly before CDP is ever attached to the authenticated profile.
+  async prepareForValidation(sessionId) {
+    const session = this.assertSession(sessionId);
     const chromeExited = await stopProcessGroup(session.chrome, 5000);
     if (!chromeExited) throw new Error('Interactive authentication Chrome did not close cleanly.');
+    const xvfbExited = await stopProcessGroup(session.xvfb, 2500);
+    if (!xvfbExited) throw new Error('Interactive authentication display did not close cleanly.');
     this.sessions.delete(sessionId);
 
-    let automationSessionId = null;
-    try {
-      const validationPolicy = {
-        required: false,
-        allowedHosts: Array.isArray(browserStatePolicy?.allowedHosts) ? browserStatePolicy.allowedHosts : [],
-      };
-      const validated = await this.automationController.start(launchUrl, {
-        userDataDir: session.userDataDir,
-        preserveUserDataDir: true,
-        browserStatePolicy: validationPolicy,
-        authentication,
-      });
-      automationSessionId = validated.sessionId;
-      if (validated?.authentication?.required !== true || validated?.authentication?.verified !== true) {
-        throw Object.assign(new Error('Authenticated profile did not pass fresh-browser validation.'), {
-          statusCode: 409,
-          code: 'AUTHENTICATION_NOT_VERIFIED',
-        });
-      }
-      const browserState = await this.automationController.exportAuthorizedState(automationSessionId);
-      console.log(JSON.stringify({
-        event: 'interactive_auth_validated',
-        sessionId,
-        validationBrowserSessionId: automationSessionId,
-        browser: 'google-chrome-stable',
-      }));
-      return {
-        authentication: validated.authentication,
-        browserState,
-        profileValidation: { verified: true, browser: 'google-chrome-stable' },
-      };
-    } finally {
-      if (automationSessionId) {
-        try { await this.automationController.stop(automationSessionId); } catch {}
-      }
-      await stopProcessGroup(session.xvfb);
-      rmSync(session.userDataDir, { recursive: true, force: true });
-    }
+    console.log(JSON.stringify({
+      event: 'interactive_auth_handoff_ready',
+      sessionId,
+      browser: 'google-chrome-stable',
+      browserVersion: session.chromeVersion || 'unknown',
+      automationAttached: false,
+    }));
+
+    return {
+      sessionId,
+      profileId: sessionId,
+      browser: 'google-chrome-stable',
+      browserVersion: session.chromeVersion || 'unknown',
+      chromeClosed: true,
+      displayClosed: true,
+    };
+  }
+
+  cleanupProfile(profileId) {
+    const path = this.profilePath(profileId);
+    rmSync(path, { recursive: true, force: true });
+    return { profileId: String(profileId), removed: !existsSync(path) };
   }
 
   async stop(sessionId) {
@@ -429,7 +417,7 @@ export class InteractiveAuthBrowserManager {
       return { active: false, sessionId: String(sessionId || ''), cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } };
     }
     this.sessions.delete(session.sessionId);
-    const clean = await this.cleanup(session);
+    const clean = await this.cleanup(session, false);
     return {
       active: false,
       sessionId: session.sessionId,
@@ -441,10 +429,10 @@ export class InteractiveAuthBrowserManager {
     };
   }
 
-  async cleanup(session) {
+  async cleanup(session, preserveProfile = false) {
     const chromeExited = await stopProcessGroup(session.chrome);
     const xvfbExited = await stopProcessGroup(session.xvfb);
-    rmSync(session.userDataDir, { recursive: true, force: true });
+    if (!preserveProfile) rmSync(session.userDataDir, { recursive: true, force: true });
     return chromeExited && xvfbExited;
   }
 
