@@ -96,6 +96,34 @@ services:
       - browser-runtime
     restart: unless-stopped
 
+  interactive-auth-worker:
+    build:
+      context: .
+      dockerfile: browser-worker/Dockerfile
+    command: ["node", "src/interactive-auth-server.mjs"]
+    init: true
+    shm_size: "1gb"
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      PORT: 8082
+      GOOGLE_CHROME_EXECUTABLE: ${GOOGLE_CHROME_EXECUTABLE:-/usr/bin/google-chrome-stable}
+      XVFB_EXECUTABLE: ${XVFB_EXECUTABLE:-/usr/bin/Xvfb}
+      AUTH_BROWSER_PROFILE_ROOT: /srv/interactive-auth-profiles
+      WORKER_CONTROL_SECRET: ${WORKER_CONTROL_SECRET:?WORKER_CONTROL_SECRET must be set}
+      MAX_BROWSER_SESSIONS: ${MAX_BROWSER_SESSIONS:-3}
+      NODE_ENV: production
+    volumes:
+      - interactive-auth-profiles:/srv/interactive-auth-profiles
+    networks:
+      - browser-runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8082/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
   browser-worker:
     build:
       context: .
@@ -104,9 +132,10 @@ services:
     shm_size: "1gb"
     environment:
       PORT: 8081
-      CHROMIUM_EXECUTABLE: ${CHROMIUM_EXECUTABLE:-/usr/bin/google-chrome-stable}
+      CHROMIUM_EXECUTABLE: ${CHROMIUM_EXECUTABLE:-/usr/bin/chromium}
       GOOGLE_CHROME_EXECUTABLE: ${GOOGLE_CHROME_EXECUTABLE:-/usr/bin/google-chrome-stable}
-      XVFB_EXECUTABLE: ${XVFB_EXECUTABLE:-/usr/bin/Xvfb}
+      INTERACTIVE_AUTH_WORKER_URL: http://interactive-auth-worker:8082
+      AUTH_BROWSER_PROFILE_ROOT: /srv/interactive-auth-profiles
       BROWSER_DISPLAY_MODE: ${BROWSER_DISPLAY_MODE:-headless}
       BROWSER_NAVIGATION_TIMEOUT_MS: ${BROWSER_NAVIGATION_TIMEOUT_MS:-45000}
       WORKER_CONTROL_SECRET: ${WORKER_CONTROL_SECRET:?WORKER_CONTROL_SECRET must be set}
@@ -118,6 +147,11 @@ services:
       WORKER_CONTROL_RATE_LIMIT_PER_MINUTE: ${WORKER_CONTROL_RATE_LIMIT_PER_MINUTE:-600}
       VIEWER_RATE_LIMIT_PER_MINUTE: ${VIEWER_RATE_LIMIT_PER_MINUTE:-1200}
       NODE_ENV: production
+    volumes:
+      - interactive-auth-profiles:/srv/interactive-auth-profiles
+    depends_on:
+      interactive-auth-worker:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${WORKER_PORT:-18081}:8081"
     networks:
@@ -136,3 +170,4 @@ networks:
 
 volumes:
   runtime-data:
+  interactive-auth-profiles:
