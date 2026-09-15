@@ -119,6 +119,7 @@ const server = http.createServer(async (request, response) => {
             userDataDir: profilePath,
             preserveUserDataDir: true,
             restoreLastSession: true,
+            passwordStore: 'basic',
             browserStatePolicy: {
               required: false,
               allowedHosts: configuredHosts,
