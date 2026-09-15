@@ -2,6 +2,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController, RUNTIME_PHASE } from './browser-session.mjs';
+import { InteractiveAuthBrowserManager } from './interactive-auth-browser.mjs';
 import { checkAuthentication, normalizeAuthenticationPolicy } from './browser-state.mjs';
 import { readBearerToken, resolveViewerSecret, verifyViewerToken } from './viewer-auth.mjs';
 import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './rate-limit.mjs';
@@ -15,6 +16,7 @@ const browserStateMaxBytes = Number(process.env.BROWSER_STATE_MAX_BYTES || 26214
 if (!Number.isInteger(browserStateMaxBytes) || browserStateMaxBytes < 4096 || browserStateMaxBytes > 1048576) throw new Error('BROWSER_STATE_MAX_BYTES must be an integer between 4096 and 1048576.');
 const sessionCreateMaxBytes = browserStateMaxBytes + 65536;
 const controller = new BrowserSessionController();
+const interactiveAuth = new InteractiveAuthBrowserManager({ automationController: controller });
 const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
@@ -61,8 +63,9 @@ function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-ag
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', ...buildViewerSecurityHeaders(nonce) })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
-function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
-function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
+function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication|finalize-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
+function assertAnySession(sessionId) { return interactiveAuth.has(sessionId) ? interactiveAuth.assertSession(sessionId) : controller.assertSession(sessionId); }
+function authorizeViewer(request, sessionId) { assertAnySession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
   const left = Buffer.from(supplied, 'utf8');
@@ -76,6 +79,7 @@ function assertSessionCreateBody(body) {
   assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication'], 'Browser session request contains unsupported fields.');
 }
 async function refreshLiveToolAuthentication(sessionId) {
+  if (interactiveAuth.has(sessionId)) return { required: false, verified: false };
   const session = controller.assertSession(sessionId);
   const policy = sessionAuthenticationPolicies.get(sessionId);
   if (!policy || policy.required !== true) return { required: false, verified: true };
@@ -95,7 +99,21 @@ async function assertViewerToolAuthentication(sessionId) {
 }
 async function stopSession(sessionId) {
   sessionAuthenticationPolicies.delete(sessionId);
+  if (interactiveAuth.has(sessionId)) return interactiveAuth.stop(sessionId);
   return controller.stop(sessionId);
+}
+async function sessionStatus(sessionId) {
+  if (interactiveAuth.has(sessionId)) return interactiveAuth.status(sessionId);
+  await refreshLiveToolAuthentication(sessionId);
+  return controller.getStatus(sessionId);
+}
+async function sessionFrame(sessionId) {
+  if (interactiveAuth.has(sessionId)) return interactiveAuth.frame(sessionId);
+  return controller.captureFrame(sessionId);
+}
+async function sessionInput(sessionId, body) {
+  if (interactiveAuth.has(sessionId)) return interactiveAuth.input(sessionId, body);
+  return controller.sendViewerInput(sessionId, body);
 }
 
 const server = http.createServer(async (request, response) => {
@@ -120,7 +138,25 @@ const server = http.createServer(async (request, response) => {
     // Session-scoped lifecycle API used by Laravel. Sensitive browser state is accepted only on this private, authenticated creation path and is never logged or returned.
     if (request.method === 'GET' && requestUrl.pathname === '/browser/sessions') {
       await waitForSessionCreatesToSettle();
-      return writeJson(response, 200, controller.listStatus());
+      const automated = controller.listStatus();
+      const interactive = interactiveAuth.listStatus();
+      return writeJson(response, 200, {
+        ...automated,
+        activeCount: automated.activeCount + interactive.activeCount,
+        startingCount: automated.startingCount + interactive.startingCount,
+        sessions: [...automated.sessions, ...interactive.sessions],
+      });
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/browser/interactive-auth-sessions') {
+      const body = await readJson(request, 64 * 1024);
+      assertAllowedFields(body, ['url']);
+      if (!body.url) throw Object.assign(new Error('url is required.'), { statusCode: 400 });
+      beginSessionCreate();
+      try {
+        return writeJson(response, 201, await interactiveAuth.start(body.url));
+      } finally {
+        endSessionCreate();
+      }
     }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/sessions') {
       const body = await readJson(request, sessionCreateMaxBytes);
@@ -144,15 +180,30 @@ const server = http.createServer(async (request, response) => {
     if (browserSessionRoute) {
       const { sessionId, action } = browserSessionRoute;
       if (request.method === 'GET' && action === 'status') {
-        await refreshLiveToolAuthentication(sessionId);
-        return writeJson(response, 200, controller.getStatus(sessionId));
+        return writeJson(response, 200, await sessionStatus(sessionId));
       }
-      if (request.method === 'GET' && action === 'authorized-state') return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
+      if (request.method === 'GET' && action === 'authorized-state') {
+        if (interactiveAuth.has(sessionId)) throw Object.assign(new Error('Interactive authentication must be finalized before browser state is exported.'), { statusCode: 409 });
+        return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
+      }
       if (request.method === 'POST' && action === 'verify-authentication') {
+        if (interactiveAuth.has(sessionId)) throw Object.assign(new Error('Interactive authentication is verified only during finalization.'), { statusCode: 409 });
         const body = await readJson(request, 64 * 1024);
         assertAllowedFields(body, ['authentication']);
         const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
         return writeJson(response, 200, await controller.verifyAuthentication(sessionId, authenticationPolicy));
+      }
+      if (request.method === 'POST' && action === 'finalize-authentication') {
+        if (!interactiveAuth.has(sessionId)) throw Object.assign(new Error('This browser session is not an interactive authentication session.'), { statusCode: 409 });
+        const body = await readJson(request, 64 * 1024);
+        assertAllowedFields(body, ['authentication', 'browserStatePolicy', 'launchUrl']);
+        const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+        if (!body.launchUrl) throw Object.assign(new Error('launchUrl is required.'), { statusCode: 400 });
+        return writeJson(response, 200, await interactiveAuth.finalize(sessionId, {
+          authentication: authenticationPolicy,
+          browserStatePolicy: body.browserStatePolicy || {},
+          launchUrl: body.launchUrl,
+        }));
       }
       if (request.method === 'POST' && action === 'navigate') {
         const body = await readJson(request);
@@ -182,12 +233,12 @@ const server = http.createServer(async (request, response) => {
 
     if (viewerRoute) {
       const { sessionId, action } = viewerRoute;
-      if (request.method === 'GET' && action === 'shell') { controller.assertSession(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
+      if (request.method === 'GET' && action === 'shell') { assertAnySession(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
       authorizeViewer(request, sessionId);
       await assertViewerToolAuthentication(sessionId);
-      if (request.method === 'GET' && action === 'status') return writeJson(response, 200, await controller.refreshMetadata(sessionId));
-      if (request.method === 'GET' && action === 'frame') { const frame = await controller.captureFrame(sessionId); response.writeHead(200, commonHeaders({ 'content-type': 'image/jpeg', 'content-length': String(frame.length), 'cross-origin-resource-policy': 'same-origin' })); response.end(frame); return; }
-      if (request.method === 'POST' && action === 'input') { const body = await readJson(request, 8 * 1024); return writeJson(response, 200, await controller.sendViewerInput(sessionId, body)); }
+      if (request.method === 'GET' && action === 'status') return writeJson(response, 200, await sessionStatus(sessionId));
+      if (request.method === 'GET' && action === 'frame') { const frame = await sessionFrame(sessionId); response.writeHead(200, commonHeaders({ 'content-type': 'image/jpeg', 'content-length': String(frame.length), 'cross-origin-resource-policy': 'same-origin' })); response.end(frame); return; }
+      if (request.method === 'POST' && action === 'input') { const body = await readJson(request, 8 * 1024); return writeJson(response, 200, await sessionInput(sessionId, body)); }
     }
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
