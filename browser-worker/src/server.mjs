@@ -1,8 +1,9 @@
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { join } from 'node:path';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController, RUNTIME_PHASE } from './browser-session.mjs';
-import { InteractiveAuthBrowserManager } from './interactive-auth-browser.mjs';
+import { InteractiveAuthWorkerClient } from './interactive-auth-client.mjs';
 import { checkAuthentication, normalizeAuthenticationPolicy } from './browser-state.mjs';
 import { readBearerToken, resolveViewerSecret, verifyViewerToken } from './viewer-auth.mjs';
 import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './rate-limit.mjs';
@@ -16,7 +17,14 @@ const browserStateMaxBytes = Number(process.env.BROWSER_STATE_MAX_BYTES || 26214
 if (!Number.isInteger(browserStateMaxBytes) || browserStateMaxBytes < 4096 || browserStateMaxBytes > 1048576) throw new Error('BROWSER_STATE_MAX_BYTES must be an integer between 4096 and 1048576.');
 const sessionCreateMaxBytes = browserStateMaxBytes + 65536;
 const controller = new BrowserSessionController();
-const interactiveAuth = new InteractiveAuthBrowserManager({ automationController: controller });
+const profileValidationController = new BrowserSessionController({
+  executablePath: process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
+  maxSessions: 1,
+  displayMode: 'headless',
+});
+const interactiveAuth = new InteractiveAuthWorkerClient();
+const finalizingInteractiveSessions = new Map();
+const authProfileRoot = String(process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/interactive-auth-profiles').replace(/\/$/, '');
 const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
@@ -64,8 +72,7 @@ function writeJson(response, statusCode, payload, extraHeaders = {}) { response.
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', ...buildViewerSecurityHeaders(nonce) })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
 function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication|finalize-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
-function assertAnySession(sessionId) { return interactiveAuth.has(sessionId) ? interactiveAuth.assertSession(sessionId) : controller.assertSession(sessionId); }
-function authorizeViewer(request, sessionId) { assertAnySession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
+function authorizeViewer(request, sessionId) { verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
   const left = Buffer.from(supplied, 'utf8');
@@ -79,7 +86,7 @@ function assertSessionCreateBody(body) {
   assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication'], 'Browser session request contains unsupported fields.');
 }
 async function refreshLiveToolAuthentication(sessionId) {
-  if (interactiveAuth.has(sessionId)) return { required: false, verified: false };
+  if (!controller.has(sessionId)) return { required: false, verified: false };
   const session = controller.assertSession(sessionId);
   const policy = sessionAuthenticationPolicies.get(sessionId);
   if (!policy || policy.required !== true) return { required: false, verified: true };
@@ -97,23 +104,65 @@ async function assertViewerToolAuthentication(sessionId) {
     );
   }
 }
+function finalizingStatus(sessionId) {
+  const item = finalizingInteractiveSessions.get(sessionId);
+  if (!item) return null;
+  return {
+    active: true,
+    sessionId,
+    pid: null,
+    url: item.launchUrl,
+    title: 'Validating administrator authentication',
+    viewport: { width: 1440, height: 900 },
+    viewer: 'restricted',
+    displayMode: 'profile-validation',
+    browser: 'google-chrome-stable',
+    automationAttached: true,
+    authentication: { required: true, verified: false },
+  };
+}
+
+async function interactiveStatusOrNull(sessionId) {
+  try {
+    return await interactiveAuth.status(sessionId);
+  } catch (error) {
+    if ([404, 410].includes(Number(error?.statusCode || 0))) return null;
+    throw error;
+  }
+}
+
 async function stopSession(sessionId) {
   sessionAuthenticationPolicies.delete(sessionId);
-  if (interactiveAuth.has(sessionId)) return interactiveAuth.stop(sessionId);
-  return controller.stop(sessionId);
+  if (controller.has(sessionId)) return controller.stop(sessionId);
+  if (finalizingInteractiveSessions.has(sessionId)) {
+    throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
+  }
+  return interactiveAuth.stop(sessionId);
 }
 async function sessionStatus(sessionId) {
-  if (interactiveAuth.has(sessionId)) return interactiveAuth.status(sessionId);
-  await refreshLiveToolAuthentication(sessionId);
-  return controller.getStatus(sessionId);
+  if (controller.has(sessionId)) {
+    await refreshLiveToolAuthentication(sessionId);
+    return controller.getStatus(sessionId);
+  }
+  const finalizing = finalizingStatus(sessionId);
+  if (finalizing) return finalizing;
+  const interactive = await interactiveStatusOrNull(sessionId);
+  if (interactive) return interactive;
+  throw Object.assign(new Error('Browser session is closed.'), { statusCode: 410 });
 }
 async function sessionFrame(sessionId) {
-  if (interactiveAuth.has(sessionId)) return interactiveAuth.frame(sessionId);
-  return controller.captureFrame(sessionId);
+  if (controller.has(sessionId)) return controller.captureFrame(sessionId);
+  if (finalizingInteractiveSessions.has(sessionId)) {
+    throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
+  }
+  return interactiveAuth.frame(sessionId);
 }
 async function sessionInput(sessionId, body) {
-  if (interactiveAuth.has(sessionId)) return interactiveAuth.input(sessionId, body);
-  return controller.sendViewerInput(sessionId, body);
+  if (controller.has(sessionId)) return controller.sendViewerInput(sessionId, body);
+  if (finalizingInteractiveSessions.has(sessionId)) {
+    throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
+  }
+  return interactiveAuth.input(sessionId, body);
 }
 
 const server = http.createServer(async (request, response) => {
@@ -139,12 +188,13 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && requestUrl.pathname === '/browser/sessions') {
       await waitForSessionCreatesToSettle();
       const automated = controller.listStatus();
-      const interactive = interactiveAuth.listStatus();
+      const interactive = await interactiveAuth.sessions();
+      const finalizing = [...finalizingInteractiveSessions.keys()].map((sessionId) => finalizingStatus(sessionId));
       return writeJson(response, 200, {
         ...automated,
-        activeCount: automated.activeCount + interactive.activeCount,
-        startingCount: automated.startingCount + interactive.startingCount,
-        sessions: [...automated.sessions, ...interactive.sessions],
+        activeCount: automated.activeCount + Number(interactive.activeCount || 0) + finalizing.length,
+        startingCount: automated.startingCount + Number(interactive.startingCount || 0),
+        sessions: [...automated.sessions, ...(interactive.sessions || []), ...finalizing],
       });
     }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/interactive-auth-sessions') {
@@ -183,27 +233,76 @@ const server = http.createServer(async (request, response) => {
         return writeJson(response, 200, await sessionStatus(sessionId));
       }
       if (request.method === 'GET' && action === 'authorized-state') {
-        if (interactiveAuth.has(sessionId)) throw Object.assign(new Error('Interactive authentication must be finalized before browser state is exported.'), { statusCode: 409 });
+        if (!controller.has(sessionId)) throw Object.assign(new Error('Interactive authentication must be finalized before browser state is exported.'), { statusCode: 409 });
         return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
       }
       if (request.method === 'POST' && action === 'verify-authentication') {
-        if (interactiveAuth.has(sessionId)) throw Object.assign(new Error('Interactive authentication is verified only during finalization.'), { statusCode: 409 });
+        if (!controller.has(sessionId)) throw Object.assign(new Error('Interactive authentication is verified only during finalization.'), { statusCode: 409 });
         const body = await readJson(request, 64 * 1024);
         assertAllowedFields(body, ['authentication']);
         const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
         return writeJson(response, 200, await controller.verifyAuthentication(sessionId, authenticationPolicy));
       }
       if (request.method === 'POST' && action === 'finalize-authentication') {
-        if (!interactiveAuth.has(sessionId)) throw Object.assign(new Error('This browser session is not an interactive authentication session.'), { statusCode: 409 });
+        if (controller.has(sessionId) || finalizingInteractiveSessions.has(sessionId)) {
+          throw Object.assign(new Error('This browser session is not available for interactive authentication finalization.'), { statusCode: 409 });
+        }
         const body = await readJson(request, 64 * 1024);
         assertAllowedFields(body, ['authentication', 'browserStatePolicy', 'launchUrl']);
         const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
         if (!body.launchUrl) throw Object.assign(new Error('launchUrl is required.'), { statusCode: 400 });
-        return writeJson(response, 200, await interactiveAuth.finalize(sessionId, {
-          authentication: authenticationPolicy,
-          browserStatePolicy: body.browserStatePolicy || {},
-          launchUrl: body.launchUrl,
-        }));
+
+        const prepared = await interactiveAuth.prepare(sessionId);
+        const profileId = String(prepared?.profileId || '');
+        if (!/^[0-9a-f-]{36}$/i.test(profileId)) {
+          throw Object.assign(new Error('Interactive authentication worker returned an invalid profile identifier.'), { statusCode: 502 });
+        }
+        const profilePath = join(authProfileRoot, profileId);
+        finalizingInteractiveSessions.set(sessionId, { launchUrl: body.launchUrl, profileId });
+        let validationSessionId = null;
+        try {
+          const validationPolicy = {
+            required: false,
+            allowedHosts: Array.isArray(body.browserStatePolicy?.allowedHosts)
+              ? body.browserStatePolicy.allowedHosts
+              : [],
+          };
+          const validated = await profileValidationController.start(body.launchUrl, {
+            userDataDir: profilePath,
+            preserveUserDataDir: true,
+            browserStatePolicy: validationPolicy,
+            authentication: authenticationPolicy,
+          });
+          validationSessionId = validated.sessionId;
+          if (validated?.authentication?.required !== true || validated?.authentication?.verified !== true) {
+            throw Object.assign(new Error('Authenticated profile did not pass fresh-browser validation.'), {
+              statusCode: 409,
+              code: 'AUTHENTICATION_NOT_VERIFIED',
+            });
+          }
+          const browserState = await profileValidationController.exportAuthorizedState(validationSessionId);
+          console.log(JSON.stringify({
+            event: 'interactive_auth_validated',
+            sessionId,
+            browser: 'google-chrome-stable',
+            browserVersion: prepared?.browserVersion || 'unknown',
+          }));
+          return writeJson(response, 200, {
+            authentication: validated.authentication,
+            browserState,
+            profileValidation: {
+              verified: true,
+              browser: 'google-chrome-stable',
+              browserVersion: prepared?.browserVersion || 'unknown',
+            },
+          });
+        } finally {
+          if (validationSessionId) {
+            try { await profileValidationController.stop(validationSessionId); } catch {}
+          }
+          try { await interactiveAuth.cleanupProfile(profileId); } catch {}
+          finalizingInteractiveSessions.delete(sessionId);
+        }
       }
       if (request.method === 'POST' && action === 'navigate') {
         const body = await readJson(request);
@@ -233,7 +332,7 @@ const server = http.createServer(async (request, response) => {
 
     if (viewerRoute) {
       const { sessionId, action } = viewerRoute;
-      if (request.method === 'GET' && action === 'shell') { assertAnySession(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
+      if (request.method === 'GET' && action === 'shell') { await sessionStatus(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
       authorizeViewer(request, sessionId);
       await assertViewerToolAuthentication(sessionId);
       if (request.method === 'GET' && action === 'status') return writeJson(response, 200, await sessionStatus(sessionId));
@@ -250,6 +349,6 @@ const server = http.createServer(async (request, response) => {
 });
 server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' })));
 let shuttingDown = false;
-async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await interactiveAuth.stopAll(); await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
+async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await profileValidationController.stopAll(); await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
