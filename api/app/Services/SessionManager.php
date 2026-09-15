@@ -27,8 +27,9 @@ final class SessionManager
         array $browserStatePolicy = [],
         array $authentication = [],
         string $accountScope = 'legacy',
+        bool $interactiveAuthentication = false,
     ): array {
-        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope): array {
+        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope, $interactiveAuthentication): array {
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -105,7 +106,9 @@ final class SessionManager
             ]);
 
             try {
-                $workerStatus = $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication);
+                $workerStatus = $interactiveAuthentication
+                    ? $this->worker->startInteractiveAuthentication($launchUrl)
+                    : $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication);
             } catch (RuntimeApiException $exception) {
                 $failureCode = in_array($exception->errorCode, ['BROWSER_STATE_INVALID', 'BROWSER_STATE_TOO_LARGE', 'TOOL_AUTH_NOT_VERIFIED'], true)
                     ? $exception->errorCode
@@ -180,6 +183,7 @@ final class SessionManager
             $operatorPolicy,
             ['required' => false, 'urlContainsAny' => [], 'selectorsAny' => [], 'timeoutSeconds' => 10],
             $accountScope,
+            true,
         );
     }
 
