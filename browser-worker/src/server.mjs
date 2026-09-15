@@ -278,6 +278,7 @@ const server = http.createServer(async (request, response) => {
           const validated = await profileValidationController.start(body.launchUrl, {
             userDataDir: profilePath,
             preserveUserDataDir: true,
+            restoreLastSession: true,
             browserStatePolicy: validationPolicy,
             authentication: authenticationPolicy,
           });
