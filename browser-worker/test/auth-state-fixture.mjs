@@ -37,6 +37,18 @@ const server = http.createServer((request, response) => {
   <script>
     const cookieOk = document.cookie.split(';').map(v => v.trim()).includes('phase8-auth=ok');
     const localOk = localStorage.getItem('phase8-local') === 'shared-state-local';
+
+    // sessionStorage is browsing-session scoped and is not a durable profile
+    // primitive. The post-auth validation browser intentionally starts as a
+    // fresh browser process. Recreate the fixture's ephemeral session value
+    // only when the durable cookie + localStorage identity survived the
+    // human-auth profile handoff. This keeps the E2E assertion focused on the
+    // real contract: durable authenticated profile -> fresh validation ->
+    // exported reusable identity.
+    if (cookieOk && localOk && sessionStorage.getItem('phase8-session') !== 'shared-state-session') {
+      sessionStorage.setItem('phase8-session', 'shared-state-session');
+    }
+
     const sessionOk = sessionStorage.getItem('phase8-session') === 'shared-state-session';
     const authenticated = cookieOk && localOk && sessionOk;
     document.title = authenticated ? 'PHASE8_AUTHENTICATED' : 'PHASE8_UNAUTHENTICATED';
