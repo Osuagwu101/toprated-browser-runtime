@@ -11,25 +11,25 @@ final class ToolAuthenticationState
     private const READY = 'ready';
     private const REAUTH_REQUIRED = 'reauth_required';
 
-    public function assertLaunchAllowed(string $toolSlug, array $authentication): void
+    public function assertLaunchAllowed(string $toolSlug, array $authentication, string $accountScope = 'legacy'): void
     {
         if (($authentication['required'] ?? false) !== true) {
             return;
         }
 
-        $state = $this->status($toolSlug);
+        $state = $this->status($toolSlug, $accountScope);
         if ($state['status'] === self::REAUTH_REQUIRED) {
             throw $this->reauthRequired();
         }
     }
 
-    public function requireReauthentication(string $toolSlug, string $reasonCode): array
+    public function requireReauthentication(string $toolSlug, string $reasonCode, string $accountScope = 'legacy'): array
     {
         $now = now();
-        $existing = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->first();
+        $existing = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
 
         DB::table('tool_auth_states')->updateOrInsert(
-            ['tool_slug' => $toolSlug],
+            ['tool_slug' => $toolSlug, 'account_scope' => $accountScope],
             [
                 'status' => self::REAUTH_REQUIRED,
                 'reason_code' => $this->boundedReason($reasonCode),
@@ -41,16 +41,16 @@ final class ToolAuthenticationState
             ],
         );
 
-        return $this->status($toolSlug);
+        return $this->status($toolSlug, $accountScope);
     }
 
-    public function markRestored(string $toolSlug): array
+    public function markRestored(string $toolSlug, string $accountScope = 'legacy'): array
     {
         $now = now();
-        $existing = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->first();
+        $existing = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
 
         DB::table('tool_auth_states')->updateOrInsert(
-            ['tool_slug' => $toolSlug],
+            ['tool_slug' => $toolSlug, 'account_scope' => $accountScope],
             [
                 'status' => self::READY,
                 'reason_code' => null,
@@ -62,16 +62,16 @@ final class ToolAuthenticationState
             ],
         );
 
-        return $this->status($toolSlug);
+        return $this->status($toolSlug, $accountScope);
     }
 
-    public function markVerified(string $toolSlug): array
+    public function markVerified(string $toolSlug, string $accountScope = 'legacy'): array
     {
         $now = now();
-        $existing = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->first();
+        $existing = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
 
         DB::table('tool_auth_states')->updateOrInsert(
-            ['tool_slug' => $toolSlug],
+            ['tool_slug' => $toolSlug, 'account_scope' => $accountScope],
             [
                 'status' => self::READY,
                 'reason_code' => null,
@@ -83,12 +83,12 @@ final class ToolAuthenticationState
             ],
         );
 
-        return $this->status($toolSlug);
+        return $this->status($toolSlug, $accountScope);
     }
 
-    public function status(string $toolSlug): array
+    public function status(string $toolSlug, string $accountScope = 'legacy'): array
     {
-        $row = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->first();
+        $row = DB::table('tool_auth_states')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
         if ($row === null) {
             return [
                 'toolSlug' => $toolSlug,
