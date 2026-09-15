@@ -15,7 +15,10 @@ const server = http.createServer((request, response) => {
     <button id="approve" style="position:absolute;left:100px;top:100px;width:260px;height:100px">Approve identity</button>
     <script>
       document.getElementById('approve').addEventListener('click', () => {
-        document.cookie = 'phase8-auth=ok; Path=/; SameSite=Lax';
+        // The human-auth -> validation handoff closes Chrome cleanly and
+        // starts a fresh process, so the fixture must use a durable login
+        // cookie rather than a browser-session-only cookie.
+        document.cookie = 'phase8-auth=ok; Path=/; Max-Age=3600; SameSite=Lax';
         localStorage.setItem('phase8-local', 'shared-state-local');
         sessionStorage.setItem('phase8-session', 'shared-state-session');
         location.href = '/dashboard';
