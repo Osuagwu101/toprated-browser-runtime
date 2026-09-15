@@ -184,7 +184,12 @@ export class BrowserSessionController {
     if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
-    const userDataDir = mkdtempSync(join(tmpdir(), 'toprated-browser-'));
+    const suppliedUserDataDir = options?.userDataDir == null ? '' : String(options.userDataDir);
+    if (suppliedUserDataDir && (!suppliedUserDataDir.startsWith(tmpdir() + '/') || !existsSync(suppliedUserDataDir))) {
+      throw new Error('Reusable browser profile directory is invalid.');
+    }
+    const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
+    const preserveUserDataDir = options?.preserveUserDataDir === true;
     const chromiumArgs = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'];
     const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
     const launcherArgs = this.displayMode === 'virtual-display'
@@ -207,6 +212,7 @@ export class BrowserSessionController {
         sessionId,
         process: browserProcess,
         userDataDir,
+        preserveUserDataDir,
         port,
         cdp,
         url: 'about:blank',
@@ -234,7 +240,7 @@ export class BrowserSessionController {
       return this.getStatus(sessionId);
     } catch (error) {
       if (sessionId && this.sessions.has(sessionId)) { try { await this.stop(sessionId); } catch {} }
-      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); rmSync(userDataDir, { recursive: true, force: true }); }
+      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); if (!preserveUserDataDir) rmSync(userDataDir, { recursive: true, force: true }); }
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
@@ -357,7 +363,7 @@ export class BrowserSessionController {
     if (orphanPids.length) { killProcessGroup(rootPid, 'SIGKILL'); for (const pid of orphanPids) { try { process.kill(pid, 'SIGKILL'); } catch {} } await sleep(250); }
     groupPids = collectProcessGroup(rootPid); orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
     const zombiePids = orphanPids.filter((pid) => readProcessState(pid) === 'Z');
-    rmSync(session.userDataDir, { recursive: true, force: true });
+    if (session.preserveUserDataDir !== true) rmSync(session.userDataDir, { recursive: true, force: true });
     return { rootExited, orphanPids, zombiePids };
   }
   async stop(sessionId) { const id = String(sessionId || ''); const session = this.sessions.get(id); if (!session) return { active: false, phase: RUNTIME_PHASE, sessionId: id || null, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } }; this.sessions.delete(id); const pid = session.process.pid; const cleanup = await this.cleanupSession(session); return { active: false, phase: RUNTIME_PHASE, sessionId: id, pid, cleanup }; }
