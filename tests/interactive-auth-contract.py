@@ -79,9 +79,17 @@ for needle in [
     if needle not in compose:
         raise SystemExit(f"isolated auth service contract missing {needle!r}")
 
+auth_worker_block = compose.split("\n  interactive-auth-worker:", 1)[1].split("\n  browser-worker:", 1)[0]
+if "browser-runtime" in auth_worker_block:
+    raise SystemExit("interactive auth worker must not share the API/writer runtime network")
+if "interactive-auth-control" not in auth_worker_block:
+    raise SystemExit("interactive auth worker must use its dedicated control network")
+
 browser_worker_block = compose.split("\n  browser-worker:\n    build:", 1)[1].split("\nnetworks:", 1)[0]
 if "SYS_ADMIN" in browser_worker_block:
     raise SystemExit("writer browser worker must not receive SYS_ADMIN")
+if "interactive-auth-control" not in browser_worker_block:
+    raise SystemExit("writer proxy must join the dedicated auth control network")
 
 for needle in [
     "InteractiveAuthBrowserManager",
