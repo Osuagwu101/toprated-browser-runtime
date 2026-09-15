@@ -1,6 +1,5 @@
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { join } from 'node:path';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController, RUNTIME_PHASE } from './browser-session.mjs';
 import { InteractiveAuthWorkerClient } from './interactive-auth-client.mjs';
@@ -17,14 +16,8 @@ const browserStateMaxBytes = Number(process.env.BROWSER_STATE_MAX_BYTES || 26214
 if (!Number.isInteger(browserStateMaxBytes) || browserStateMaxBytes < 4096 || browserStateMaxBytes > 1048576) throw new Error('BROWSER_STATE_MAX_BYTES must be an integer between 4096 and 1048576.');
 const sessionCreateMaxBytes = browserStateMaxBytes + 65536;
 const controller = new BrowserSessionController();
-const profileValidationController = new BrowserSessionController({
-  executablePath: process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
-  maxSessions: 1,
-  displayMode: 'headless',
-});
 const interactiveAuth = new InteractiveAuthWorkerClient();
 const finalizingInteractiveSessions = new Map();
-const authProfileRoot = String(process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/interactive-auth-profiles').replace(/\/$/, '');
 const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
@@ -260,56 +253,27 @@ const server = http.createServer(async (request, response) => {
         const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
         if (!body.launchUrl) throw Object.assign(new Error('launchUrl is required.'), { statusCode: 400 });
 
-        const prepared = await interactiveAuth.prepare(sessionId);
-        const profileId = String(prepared?.profileId || '');
-        if (!/^[0-9a-f-]{36}$/i.test(profileId)) {
-          throw Object.assign(new Error('Interactive authentication worker returned an invalid profile identifier.'), { statusCode: 502 });
-        }
-        const profilePath = join(authProfileRoot, profileId);
-        finalizingInteractiveSessions.set(sessionId, { launchUrl: body.launchUrl, profileId });
-        let validationSessionId = null;
+        const validationPolicy = {
+          required: false,
+          allowedHosts: Array.isArray(body.browserStatePolicy?.allowedHosts)
+            ? body.browserStatePolicy.allowedHosts
+            : [],
+        };
+        finalizingInteractiveSessions.set(sessionId, { launchUrl: body.launchUrl });
         try {
-          const validationPolicy = {
-            required: false,
-            allowedHosts: Array.isArray(body.browserStatePolicy?.allowedHosts)
-              ? body.browserStatePolicy.allowedHosts
-              : [],
-          };
-          const validated = await profileValidationController.start(body.launchUrl, {
-            userDataDir: profilePath,
-            preserveUserDataDir: true,
-            restoreLastSession: true,
-            browserStatePolicy: validationPolicy,
+          const finalized = await interactiveAuth.finalize(sessionId, {
             authentication: authenticationPolicy,
+            browserStatePolicy: validationPolicy,
+            launchUrl: body.launchUrl,
           });
-          validationSessionId = validated.sessionId;
-          if (validated?.authentication?.required !== true || validated?.authentication?.verified !== true) {
+          if (finalized?.authentication?.required !== true || finalized?.authentication?.verified !== true) {
             throw Object.assign(new Error('Authenticated profile did not pass fresh-browser validation.'), {
               statusCode: 409,
               code: 'AUTHENTICATION_NOT_VERIFIED',
             });
           }
-          const browserState = await profileValidationController.exportAuthorizedState(validationSessionId);
-          console.log(JSON.stringify({
-            event: 'interactive_auth_validated',
-            sessionId,
-            browser: 'google-chrome-stable',
-            browserVersion: prepared?.browserVersion || 'unknown',
-          }));
-          return writeJson(response, 200, {
-            authentication: validated.authentication,
-            browserState,
-            profileValidation: {
-              verified: true,
-              browser: 'google-chrome-stable',
-              browserVersion: prepared?.browserVersion || 'unknown',
-            },
-          });
+          return writeJson(response, 200, finalized);
         } finally {
-          if (validationSessionId) {
-            try { await profileValidationController.stop(validationSessionId); } catch {}
-          }
-          try { await interactiveAuth.cleanupProfile(profileId); } catch {}
           finalizingInteractiveSessions.delete(sessionId);
         }
       }
@@ -358,6 +322,6 @@ const server = http.createServer(async (request, response) => {
 });
 server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' })));
 let shuttingDown = false;
-async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await profileValidationController.stopAll(); await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
+async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
