@@ -86,8 +86,10 @@ def approve_identity(tool, through_service=False, account_id=None):
         })
         assert code == 200 and accepted["inputAccepted"] is True, (code, accepted)
 
+    last_status = None
     for _ in range(30):
         code, status = viewer("GET", viewer_url, token, "/status")
+        last_status = {"code": code, "status": status}
         if code == 200 and (
             "/dashboard" in status.get("url", "")
             or "PHASE8_AUTHENTICATED" in status.get("title", "")
@@ -95,7 +97,9 @@ def approve_identity(tool, through_service=False, account_id=None):
             break
         time.sleep(0.2)
     else:
-        raise AssertionError("administrator browser never reached the authenticated fixture")
+        raise AssertionError(
+            f"administrator browser never reached the authenticated fixture: {last_status}"
+        )
 
     if through_service:
         code, approved = signed(
