@@ -309,6 +309,10 @@ export class InteractiveAuthBrowserManager {
     const input = validateViewerInput(rawInput);
     const env = { ...process.env, DISPLAY: session.display };
     const run = (args) => commandBuffer('/usr/bin/xdotool', args, { env });
+    const windowIds = chromeWindowIds(session.display);
+    if (windowIds.length) {
+      try { await run(['windowfocus', '--sync', windowIds[windowIds.length - 1]]); } catch {}
+    }
 
     if (input.type === 'mouse') {
       await run(['mousemove', '--sync', String(Math.round(input.x)), String(Math.round(input.y))]);
