@@ -145,7 +145,7 @@ final class ToolAuthController
         if ($accountScope === '') {
             return 'legacy';
         }
-        if (! preg_match('/^[A-Fa-f0-9-]{36}$/', $accountScope)) {
+        if (! preg_match('/^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/', $accountScope)) {
             throw new RuntimeApiException('INVALID_ACCOUNT_SCOPE', 422, 'The assigned account identifier is invalid.');
         }
 
