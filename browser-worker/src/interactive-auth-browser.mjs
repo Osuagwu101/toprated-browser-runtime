@@ -403,6 +403,14 @@ export class InteractiveAuthBrowserManager {
       throw new Error('Interactive authentication display did not close cleanly.');
     }
 
+    // Chrome profile lock/DevTools marker files are process-lifecycle artifacts,
+    // not authentication state. Remove them only after the human-controlled
+    // Chrome process and its display have fully stopped so the same profile can
+    // be reopened safely for post-auth validation.
+    for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort']) {
+      rmSync(join(session.userDataDir, name), { force: true });
+    }
+
     console.log(JSON.stringify({
       event: 'interactive_auth_handoff_ready',
       sessionId,
