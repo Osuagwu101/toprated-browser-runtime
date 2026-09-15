@@ -101,9 +101,12 @@ services:
       context: .
       dockerfile: browser-worker/Dockerfile
     init: true
+    shm_size: "1gb"
     environment:
       PORT: 8081
-      CHROMIUM_EXECUTABLE: ${CHROMIUM_EXECUTABLE:-/usr/bin/chromium}
+      CHROMIUM_EXECUTABLE: ${CHROMIUM_EXECUTABLE:-/usr/bin/google-chrome-stable}
+      GOOGLE_CHROME_EXECUTABLE: ${GOOGLE_CHROME_EXECUTABLE:-/usr/bin/google-chrome-stable}
+      XVFB_EXECUTABLE: ${XVFB_EXECUTABLE:-/usr/bin/Xvfb}
       BROWSER_DISPLAY_MODE: ${BROWSER_DISPLAY_MODE:-headless}
       BROWSER_NAVIGATION_TIMEOUT_MS: ${BROWSER_NAVIGATION_TIMEOUT_MS:-45000}
       WORKER_CONTROL_SECRET: ${WORKER_CONTROL_SECRET:?WORKER_CONTROL_SECRET must be set}
