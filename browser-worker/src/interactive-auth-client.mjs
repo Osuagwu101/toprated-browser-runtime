@@ -68,6 +68,7 @@ export class InteractiveAuthWorkerClient {
   frame(sessionId) { return request('GET', `/internal/sessions/${encodeURIComponent(sessionId)}/frame`, undefined, { binary: true, timeoutMs: 10000 }); }
   input(sessionId, body) { return request('POST', `/internal/sessions/${encodeURIComponent(sessionId)}/input`, body, { timeoutMs: 10000 }); }
   prepare(sessionId) { return request('POST', `/internal/sessions/${encodeURIComponent(sessionId)}/prepare`, {}, { timeoutMs: 15000 }); }
+  finalize(sessionId, body) { return request('POST', `/internal/sessions/${encodeURIComponent(sessionId)}/finalize`, body, { timeoutMs: 180000 }); }
   stop(sessionId) { return request('DELETE', `/internal/sessions/${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 10000 }); }
   cleanupProfile(profileId) { return request('DELETE', `/internal/profiles/${encodeURIComponent(profileId)}`, undefined, { timeoutMs: 10000 }); }
 }
