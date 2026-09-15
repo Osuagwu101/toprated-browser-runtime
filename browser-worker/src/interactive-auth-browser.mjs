@@ -62,19 +62,24 @@ async function stopProcessGroup(processRef, graceMs = 2500) {
 }
 
 function chromeWindowIds(display, pid = null) {
-  try {
-    const args = ['search', '--onlyvisible'];
-    if (Number.isInteger(Number(pid)) && Number(pid) > 0) args.push('--pid', String(pid));
-    else args.push('--class', 'google-chrome');
-    const output = execFileSync('/usr/bin/xdotool', args, {
-      env: { ...process.env, DISPLAY: display },
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 1000,
-    });
-    return String(output || '').trim().split(/\s+/).filter(Boolean);
-  } catch {
-    return [];
+  const search = (args) => {
+    try {
+      const output = execFileSync('/usr/bin/xdotool', ['search', '--onlyvisible', ...args], {
+        env: { ...process.env, DISPLAY: display },
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
+      });
+      return String(output || '').trim().split(/\s+/).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+
+  if (Number.isInteger(Number(pid)) && Number(pid) > 0) {
+    const byPid = search(['--pid', String(pid)]);
+    if (byPid.length) return byPid;
   }
+  return search(['--class', 'google-chrome']);
 }
 
 function chromeWindowReady(display, pid = null) {
