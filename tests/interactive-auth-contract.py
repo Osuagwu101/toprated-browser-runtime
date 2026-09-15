@@ -79,7 +79,7 @@ for needle in [
     if needle not in compose:
         raise SystemExit(f"isolated auth service contract missing {needle!r}")
 
-browser_worker_block = compose.split("  browser-worker:", 1)[1].split("\nnetworks:", 1)[0]
+browser_worker_block = compose.split("\n  browser-worker:\n    build:", 1)[1].split("\nnetworks:", 1)[0]
 if "SYS_ADMIN" in browser_worker_block:
     raise SystemExit("writer browser worker must not receive SYS_ADMIN")
 
