@@ -27,6 +27,15 @@ function processAlive(processRef) {
   return Boolean(processRef && processRef.exitCode === null && processRef.signalCode === null);
 }
 
+function classifyChromeLaunchError(stderr) {
+  const value = String(stderr || '');
+  if (/sandbox|zygote_host_impl_linux|namespace|operation not permitted/i.test(value)) return 'sandbox';
+  if (/missing x server|cannot open display|x11|display/i.test(value)) return 'display';
+  if (/singletonlock|user data directory|profile/i.test(value)) return 'profile';
+  if (/crashpad/i.test(value)) return 'crashpad';
+  return 'unknown';
+}
+
 function readChromeVersion(executable) {
   try {
     return String(execFileSync(executable, ['--version'], {
@@ -316,6 +325,7 @@ export class InteractiveAuthBrowserManager {
         chromeSignal: chrome?.signalCode ?? null,
         xvfbExitCode: xvfb?.exitCode ?? null,
         xvfbSignal: xvfb?.signalCode ?? null,
+        diagnostic: classifyChromeLaunchError(stderr),
       }));
       throw Object.assign(new Error(detail ? `${error.message} Chrome: ${detail}` : error.message), {
         statusCode: error?.statusCode || 500,
