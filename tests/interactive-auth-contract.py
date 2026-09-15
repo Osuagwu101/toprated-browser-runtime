@@ -15,7 +15,8 @@ required_manager = [
     "--headless",
     "xdotool",
     "ImageMagick import",
-    "finalize(sessionId",
+    "prepareForValidation(sessionId",
+    "cleanupProfile(profileId",
 ]
 for needle in required_manager:
     if needle not in manager:
@@ -38,6 +39,9 @@ required_server = [
     "finalize-authentication",
     "interactiveAuth.frame(sessionId)",
     "interactiveAuth.input(sessionId, body)",
+    "interactiveAuth.prepare(sessionId)",
+    "profileValidationController.start",
+    "interactiveAuth.cleanupProfile(profileId)",
 ]
 for needle in required_server:
     if needle not in server:
