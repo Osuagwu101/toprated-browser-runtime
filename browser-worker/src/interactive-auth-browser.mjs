@@ -41,16 +41,35 @@ async function stopProcessGroup(processRef, graceMs = 2500) {
   return !processAlive(processRef);
 }
 
-function chromeWindowReady(display) {
+function chromeWindowIds(display) {
   try {
     const output = execFileSync('/usr/bin/xdotool', ['search', '--onlyvisible', '--class', 'google-chrome'], {
       env: { ...process.env, DISPLAY: display },
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1000,
     });
-    return String(output || '').trim() !== '';
+    return String(output || '').trim().split(/\s+/).filter(Boolean);
   } catch {
-    return false;
+    return [];
+  }
+}
+
+function chromeWindowReady(display) {
+  return chromeWindowIds(display).length > 0;
+}
+
+function chromeWindowTitle(display) {
+  const ids = chromeWindowIds(display);
+  if (!ids.length) return '';
+  try {
+    const output = execFileSync('/usr/bin/xdotool', ['getwindowname', ids[ids.length - 1]], {
+      env: { ...process.env, DISPLAY: display },
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    });
+    return String(output || '').trim();
+  } catch {
+    return '';
   }
 }
 
@@ -172,7 +191,13 @@ export class InteractiveAuthBrowserManager {
     return session;
   }
 
-  status(sessionId) { return this.present(this.assertSession(sessionId)); }
+  status(sessionId) {
+    const session = this.assertSession(sessionId);
+    const result = this.present(session);
+    const title = chromeWindowTitle(session.display);
+    if (title) result.title = title;
+    return result;
+  }
 
   allocateDisplay() {
     const used = new Set([...this.sessions.values()].map((session) => session.display));
