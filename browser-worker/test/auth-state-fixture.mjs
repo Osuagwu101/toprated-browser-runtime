@@ -54,7 +54,12 @@ const server = http.createServer((request, response) => {
 
     const sessionOk = sessionStorage.getItem('phase8-session') === 'shared-state-session';
     const authenticated = cookieOk && localOk && sessionOk;
-    document.title = authenticated ? 'PHASE8_AUTHENTICATED' : 'PHASE8_UNAUTHENTICATED';
+    const missing = [
+      cookieOk ? '' : 'COOKIE',
+      localOk ? '' : 'LOCAL',
+      sessionOk ? '' : 'SESSION',
+    ].filter(Boolean);
+    document.title = authenticated ? 'PHASE8_AUTHENTICATED' : 'PHASE8_MISSING_' + missing.join('_');
     const marker = document.createElement('div');
     marker.setAttribute('data-phase8-authenticated', authenticated ? 'true' : 'false');
     marker.textContent = authenticated ? 'Authenticated shared state accepted' : 'Authentication state missing';
