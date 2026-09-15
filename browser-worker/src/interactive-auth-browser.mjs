@@ -27,6 +27,17 @@ function processAlive(processRef) {
   return Boolean(processRef && processRef.exitCode === null && processRef.signalCode === null);
 }
 
+function readChromeVersion(executable) {
+  try {
+    return String(execFileSync(executable, ['--version'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 3000,
+    }) || '').trim().slice(0, 160);
+  } catch {
+    return 'unknown';
+  }
+}
+
 async function stopProcessGroup(processRef, graceMs = 2500) {
   if (!processRef || !processAlive(processRef)) return true;
   try { process.kill(-processRef.pid, 'SIGTERM'); } catch {}
@@ -177,6 +188,7 @@ export class InteractiveAuthBrowserManager {
       viewer: 'restricted',
       displayMode: 'interactive-auth',
       browser: 'google-chrome-stable',
+      browserVersion: session.chromeVersion || 'unknown',
       automationAttached: false,
       authentication: { required: false, verified: false },
     };
@@ -228,6 +240,7 @@ export class InteractiveAuthBrowserManager {
     this.startingCount += 1;
     const sessionId = randomUUID();
     const display = this.allocateDisplay();
+    const chromeVersion = readChromeVersion(this.chromeExecutable);
     const profilePrefix = join(this.profileRoot, 'toprated-auth-');
     const userDataDir = mkdtempSync(profilePrefix);
     const xvfb = spawn(this.xvfbExecutable, [display, '-screen', '0', `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, '-nolisten', 'tcp', '-noreset'], {
@@ -273,7 +286,7 @@ export class InteractiveAuthBrowserManager {
       }
       if (!chromeWindowReady(display, chrome.pid)) throw new Error('Google Chrome window did not become ready.');
 
-      const session = { sessionId, display, userDataDir, url: safeUrl, chrome, xvfb };
+      const session = { sessionId, display, userDataDir, url: safeUrl, chrome, xvfb, chromeVersion };
       this.sessions.set(sessionId, session);
       chrome.once('exit', () => {
         if (!this.sessions.has(sessionId)) return;
@@ -285,6 +298,7 @@ export class InteractiveAuthBrowserManager {
         event: 'interactive_auth_started',
         sessionId,
         browser: 'google-chrome-stable',
+        browserVersion: chromeVersion,
         automationAttached: false,
         displayMode: 'xvfb-headed',
       }));
