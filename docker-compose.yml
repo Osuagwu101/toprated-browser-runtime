@@ -116,7 +116,7 @@ services:
     volumes:
       - interactive-auth-profiles:/srv/interactive-auth-profiles
     networks:
-      - browser-runtime
+      - interactive-auth-control
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8082/health"]
@@ -156,6 +156,7 @@ services:
       - "127.0.0.1:${WORKER_PORT:-18081}:8081"
     networks:
       - browser-runtime
+      - interactive-auth-control
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/health"]
@@ -166,6 +167,8 @@ services:
 
 networks:
   browser-runtime:
+    driver: bridge
+  interactive-auth-control:
     driver: bridge
 
 volumes:
