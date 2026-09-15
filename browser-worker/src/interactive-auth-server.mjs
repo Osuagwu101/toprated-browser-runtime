@@ -1,6 +1,8 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { InteractiveAuthBrowserManager } from './interactive-auth-browser.mjs';
+import { BrowserSessionController } from './browser-session.mjs';
+import { normalizeAuthenticationPolicy } from './browser-state.mjs';
 import { assertAllowedFields, assertNoQuery, readJson } from './request-security.mjs';
 
 const port = Number(process.env.PORT || 8082);
@@ -10,6 +12,11 @@ if (Buffer.byteLength(controlSecret, 'utf8') < 32) {
 }
 
 const manager = new InteractiveAuthBrowserManager();
+const validationController = new BrowserSessionController({
+  executablePath: process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
+  maxSessions: 1,
+  displayMode: 'headless',
+});
 
 function headers(extra = {}) {
   return {
@@ -36,7 +43,7 @@ function authorize(request) {
 }
 
 function matchSession(pathname) {
-  const match = pathname.match(/^\/internal\/sessions\/([0-9a-f-]{36})(?:\/(frame|input|prepare))?$/i);
+  const match = pathname.match(/^\/internal\/sessions\/([0-9a-f-]{36})(?:\/(frame|input|prepare|finalize))?$/i);
   return match ? { sessionId: match[1], action: match[2] || 'status' } : null;
 }
 
@@ -94,6 +101,62 @@ const server = http.createServer(async (request, response) => {
         assertAllowedFields(body, []);
         return writeJson(response, 200, await manager.prepareForValidation(sessionId));
       }
+      if (request.method === 'POST' && action === 'finalize') {
+        const body = await readJson(request, 128 * 1024);
+        assertAllowedFields(body, ['authentication', 'browserStatePolicy', 'launchUrl']);
+        if (!body.launchUrl) throw Object.assign(new Error('launchUrl is required.'), { statusCode: 400 });
+
+        const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+        const configuredHosts = Array.isArray(body.browserStatePolicy?.allowedHosts)
+          ? body.browserStatePolicy.allowedHosts
+          : [];
+        const prepared = await manager.prepareForValidation(sessionId);
+        const profileId = String(prepared?.profileId || '');
+        const profilePath = manager.profilePath(profileId);
+        let validationSessionId = null;
+        try {
+          const validated = await validationController.start(body.launchUrl, {
+            userDataDir: profilePath,
+            preserveUserDataDir: true,
+            restoreLastSession: true,
+            browserStatePolicy: {
+              required: false,
+              allowedHosts: configuredHosts,
+            },
+            authentication: authenticationPolicy,
+          });
+          validationSessionId = validated.sessionId;
+          if (validated?.authentication?.required !== true || validated?.authentication?.verified !== true) {
+            throw Object.assign(new Error('Authenticated profile did not pass fresh-browser validation.'), {
+              statusCode: 409,
+              code: 'AUTHENTICATION_NOT_VERIFIED',
+            });
+          }
+          const browserState = await validationController.exportAuthorizedState(validationSessionId);
+          console.log(JSON.stringify({
+            event: 'interactive_auth_validated',
+            sessionId,
+            browser: 'google-chrome-stable',
+            browserVersion: prepared?.browserVersion || 'unknown',
+            validationLocation: 'interactive-auth-worker',
+          }));
+          return writeJson(response, 200, {
+            authentication: validated.authentication,
+            browserState,
+            profileValidation: {
+              verified: true,
+              browser: 'google-chrome-stable',
+              browserVersion: prepared?.browserVersion || 'unknown',
+              validationLocation: 'interactive-auth-worker',
+            },
+          });
+        } finally {
+          if (validationSessionId) {
+            try { await validationController.stop(validationSessionId); } catch {}
+          }
+          try { manager.cleanupProfile(profileId); } catch {}
+        }
+      }
       if (request.method === 'DELETE' && action === 'status') {
         return writeJson(response, 200, await manager.stop(sessionId));
       }
@@ -109,6 +172,12 @@ const server = http.createServer(async (request, response) => {
     const statusCode = Number(error?.statusCode || 500);
     const safeCode = [
       'INTERACTIVE_AUTH_LAUNCH_FAILED',
+      'AUTHENTICATION_NOT_VERIFIED',
+      'AUTHENTICATION_POLICY_INVALID',
+      'BROWSER_STATE_INVALID',
+      'BROWSER_LAUNCH_FAILED',
+      'BROWSER_NAVIGATION_FAILED',
+      'BROWSER_NAVIGATION_TIMEOUT',
       'RATE_LIMITED',
       'REQUEST_QUERY_FORBIDDEN',
       'REQUEST_TOO_LARGE',
@@ -142,6 +211,7 @@ async function shutdown(signal) {
   console.log(JSON.stringify({ event: 'interactive_auth_worker_stopping', signal }));
   const force = setTimeout(() => process.exit(1), 12000);
   force.unref();
+  try { await validationController.stopAll(); } catch {}
   try { await manager.stopAll(); } catch {}
   server.close(() => process.exit(0));
 }
