@@ -79,7 +79,7 @@ function chromeWindowIds(display, pid = null) {
     const byPid = search(['--pid', String(pid)]);
     if (byPid.length) return byPid;
   }
-  return search(['--class', 'google-chrome']);
+  return search(['--class', '[Gg]oogle-chrome']);
 }
 
 function chromeWindowReady(display, pid = null) {
