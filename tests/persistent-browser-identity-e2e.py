@@ -82,7 +82,7 @@ def approve_identity(tool, through_service=False, account_id=None):
 
     for event in ("pressed", "released"):
         code, accepted = viewer("POST", viewer_url, token, "/input", {
-            "type": "mouse", "event": event, "button": "left", "x": 230, "y": 150,
+            "type": "mouse", "event": event, "button": "left", "x": 230, "y": 220,
         })
         assert code == 200 and accepted["inputAccepted"] is True, (code, accepted)
 
