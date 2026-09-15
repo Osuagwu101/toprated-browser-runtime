@@ -381,11 +381,20 @@ export class InteractiveAuthBrowserManager {
 
   async prepareForValidation(sessionId) {
     const session = this.assertSession(sessionId);
-    const chromeExited = await stopProcessGroup(session.chrome, 5000);
-    if (!chromeExited) throw new Error('Interactive authentication Chrome did not close cleanly.');
-    const xvfbExited = await stopProcessGroup(session.xvfb, 2500);
-    if (!xvfbExited) throw new Error('Interactive authentication display did not close cleanly.');
+    // Remove lifecycle ownership before Chrome exits so the process-exit
+    // watchdog does not delete the profile that is intentionally being handed
+    // to the post-auth validation browser.
     this.sessions.delete(sessionId);
+    const chromeExited = await stopProcessGroup(session.chrome, 5000);
+    if (!chromeExited) {
+      await this.cleanup(session, false);
+      throw new Error('Interactive authentication Chrome did not close cleanly.');
+    }
+    const xvfbExited = await stopProcessGroup(session.xvfb, 2500);
+    if (!xvfbExited) {
+      rmSync(session.userDataDir, { recursive: true, force: true });
+      throw new Error('Interactive authentication display did not close cleanly.');
+    }
 
     console.log(JSON.stringify({
       event: 'interactive_auth_handoff_ready',
