@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
@@ -429,12 +429,23 @@ export class InteractiveAuthBrowserManager {
       rmSync(join(session.userDataDir, name), { force: true });
     }
 
+    const cookieDbCandidates = [
+      join(session.userDataDir, 'Default', 'Cookies'),
+      join(session.userDataDir, 'Default', 'Network', 'Cookies'),
+    ];
+    const cookieDb = cookieDbCandidates.find((candidate) => existsSync(candidate)) || '';
+    const cookieDbBytes = cookieDb ? (() => {
+      try { return statSync(cookieDb).size; } catch { return 0; }
+    })() : 0;
+
     console.log(JSON.stringify({
       event: 'interactive_auth_handoff_ready',
       sessionId,
       browser: 'google-chrome-stable',
       browserVersion: session.chromeVersion || 'unknown',
       automationAttached: false,
+      cookieDbPresent: Boolean(cookieDb),
+      cookieDbBytes,
     }));
 
     return {
