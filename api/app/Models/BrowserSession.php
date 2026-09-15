@@ -14,6 +14,7 @@ final class BrowserSession extends Model
         'id',
         'writer_id',
         'tool_slug',
+        'account_scope',
         'launch_url',
         'status',
         'worker_session_id',
