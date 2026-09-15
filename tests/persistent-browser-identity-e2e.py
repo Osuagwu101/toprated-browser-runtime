@@ -69,12 +69,13 @@ def worker(method, path, body=None):
     return http(method, WORKER + path, body, {"x-toprated-worker-secret": WORKER_SECRET})
 
 
-def approve_identity(tool, through_service=False):
+def approve_identity(tool, through_service=False, account_id=None):
     prefix = "/api/tool-auth" if through_service else "/api/operator/tool-auth"
+    body = {"account_id": account_id} if account_id else None
     if through_service:
-        code, started = signed("POST", f"{prefix}/{tool}/sessions", "website-admin")
+        code, started = signed("POST", f"{prefix}/{tool}/sessions", "website-admin", body)
     else:
-        code, started = operator("POST", f"{prefix}/{tool}/sessions")
+        code, started = operator("POST", f"{prefix}/{tool}/sessions", body)
     assert code == 201 and started["status"] == "active", (code, started)
     session_id = started["sessionId"]
     viewer_url, token, payload = decode_grant(started["viewerGrant"])
@@ -98,10 +99,11 @@ def approve_identity(tool, through_service=False):
             "POST",
             f"{prefix}/{tool}/sessions/{session_id}/approve",
             "website-admin",
+            body,
         )
     else:
         code, approved = operator(
-            "POST", f"{prefix}/{tool}/sessions/{session_id}/approve"
+            "POST", f"{prefix}/{tool}/sessions/{session_id}/approve", body
         )
     assert code == 200 and approved["status"] == "ready", (code, approved)
     assert approved["identity"]["available"] is True, approved
@@ -109,11 +111,11 @@ def approve_identity(tool, through_service=False):
     return approved["identity"], payload["sid"]
 
 
-def launch(tool, writer):
-    code, created = signed("POST", "/api/sessions", writer, {
-        "writer_id": writer,
-        "tool_slug": tool,
-    })
+def launch(tool, writer, account_id=None):
+    payload = {"writer_id": writer, "tool_slug": tool}
+    if account_id:
+        payload["account_id"] = account_id
+    code, created = signed("POST", "/api/sessions", writer, payload)
     assert code == 201 and created["status"] == "active", (code, created)
     serialized = json.dumps(created)
     for secret_marker in ("phase8-auth", "shared-state-local", "shared-state-session", "encrypted_payload"):
@@ -163,6 +165,33 @@ def bootstrap():
     print(json.dumps({"result": "PASS", "stage": "bootstrap", "versions": versions}))
 
 
+def account_isolation():
+    tool = TOOLS[0]
+    account_a = "11111111-1111-4111-8111-111111111111"
+    account_b = "22222222-2222-4222-8222-222222222222"
+    account_missing = "33333333-3333-4333-8333-333333333333"
+
+    identity_a, _ = approve_identity(tool, through_service=True, account_id=account_a)
+    identity_b, _ = approve_identity(tool, through_service=True, account_id=account_b)
+    assert identity_a["version"] == 1 and identity_b["version"] == 1, (identity_a, identity_b)
+
+    session_a = launch(tool, "scoped-writer-a", account_a)
+    session_b = launch(tool, "scoped-writer-b", account_b)
+    close(session_a, "scoped-writer-a")
+    close(session_b, "scoped-writer-b")
+
+    code, missing = signed("POST", "/api/sessions", "scoped-writer-missing", {
+        "writer_id": "scoped-writer-missing",
+        "tool_slug": tool,
+        "account_id": account_missing,
+    })
+    assert code == 423 and missing["code"] == "TOOL_REAUTH_REQUIRED", (code, missing)
+
+    recovered_a = launch(tool, "scoped-writer-a-retry", account_a)
+    close(recovered_a, "scoped-writer-a-retry")
+    print(json.dumps({"result": "PASS", "stage": "account-isolation"}))
+
+
 def after_restart():
     sessions = []
     for tool in TOOLS:
@@ -197,4 +226,4 @@ def expiration_recovery():
 
 if __name__ == "__main__":
     stage = sys.argv[1] if len(sys.argv) > 1 else "bootstrap"
-    {"bootstrap": bootstrap, "after-restart": after_restart, "expiration-recovery": expiration_recovery}[stage]()
+    {"bootstrap": bootstrap, "account-isolation": account_isolation, "after-restart": after_restart, "expiration-recovery": expiration_recovery}[stage]()
