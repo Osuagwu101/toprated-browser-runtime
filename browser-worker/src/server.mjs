@@ -188,7 +188,15 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && requestUrl.pathname === '/browser/sessions') {
       await waitForSessionCreatesToSettle();
       const automated = controller.listStatus();
-      const interactive = await interactiveAuth.sessions();
+      let interactive = { activeCount: 0, startingCount: 0, sessions: [] };
+      try {
+        interactive = await interactiveAuth.sessions();
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: 'interactive_auth_worker_unavailable',
+          code: String(error?.code || 'INTERACTIVE_AUTH_WORKER_UNAVAILABLE'),
+        }));
+      }
       const finalizing = [...finalizingInteractiveSessions.keys()].map((sessionId) => finalizingStatus(sessionId));
       return writeJson(response, 200, {
         ...automated,
