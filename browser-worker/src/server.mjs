@@ -243,13 +243,13 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
     const statusCode = Number(error?.statusCode || 500);
-    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
+    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'INTERACTIVE_AUTH_LAUNCH_FAILED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
     const extraHeaders = statusCode === 429 && error?.retryAfterSeconds ? { 'retry-after': String(error.retryAfterSeconds) } : {};
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }, extraHeaders);
   }
 });
 server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' })));
 let shuttingDown = false;
-async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
+async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await interactiveAuth.stopAll(); await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
