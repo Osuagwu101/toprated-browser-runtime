@@ -44,7 +44,6 @@ required_server = [
     "interactiveAuth.input(sessionId, body)",
     "interactiveAuth.finalize(sessionId",
     "finalizingInteractiveSessions.set",
-    "validationLocation",
 ]
 for needle in required_server:
     if needle not in server:
@@ -98,6 +97,7 @@ for needle in [
     "action === 'finalize'",
     "validationController.start",
     "validationController.exportAuthorizedState",
+    "validationLocation: 'interactive-auth-worker'",
     "automationAttachedDuringAuth: false",
 ]:
     if needle not in interactive_server:
