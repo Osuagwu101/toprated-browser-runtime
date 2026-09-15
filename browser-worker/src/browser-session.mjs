@@ -264,9 +264,14 @@ export class BrowserSessionController {
     const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
     const preserveUserDataDir = options?.preserveUserDataDir === true;
     const restoreLastSession = options?.restoreLastSession === true;
+    const passwordStore = options?.passwordStore == null ? '' : String(options.passwordStore);
+    if (passwordStore && passwordStore !== 'basic') {
+      throw new Error('Reusable browser profile password store is invalid.');
+    }
     const chromiumArgs = [
       '--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter',
       '--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
+      ...(passwordStore === 'basic' ? ['--password-store=basic'] : []),
       `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,
       ...(restoreLastSession ? ['--restore-last-session'] : ['about:blank']),
     ];
