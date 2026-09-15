@@ -8,6 +8,7 @@ import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './
 import { assertAllowedFields, assertNoQuery, readJson } from './request-security.mjs';
 import { SessionPolicyStore } from './session-policy-store.mjs';
 import { buildViewerHtml } from './viewer-page.mjs';
+import { buildViewerSecurityHeaders } from './viewer-security.mjs';
 
 const port = Number(process.env.PORT || 8081);
 const browserStateMaxBytes = Number(process.env.BROWSER_STATE_MAX_BYTES || 262144);
@@ -58,7 +59,7 @@ policyPruneTimer.unref();
 
 function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-age=0', pragma: 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...extra }; }
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
-function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', 'content-security-policy': `default-src 'none'; img-src 'self' blob: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`, 'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()', 'cross-origin-opener-policy': 'same-origin', 'cross-origin-resource-policy': 'same-origin', 'x-frame-options': 'DENY' })); response.end(html); }
+function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', ...buildViewerSecurityHeaders(nonce) })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
 function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
 function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
