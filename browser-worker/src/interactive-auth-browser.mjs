@@ -233,8 +233,10 @@ export class InteractiveAuthBrowserManager {
     });
     let chrome = null;
     let stderr = '';
+    let failureStage = 'xvfb-start';
 
     try {
+      failureStage = 'xvfb-ready';
       const socketPath = `/tmp/.X11-unix/X${display.slice(1)}`;
       const deadline = Date.now() + 8000;
       while (Date.now() < deadline && !existsSync(socketPath)) {
@@ -243,6 +245,7 @@ export class InteractiveAuthBrowserManager {
       }
       if (!existsSync(socketPath)) throw new Error('Xvfb display did not become ready.');
 
+      failureStage = 'chrome-start';
       const args = buildInteractiveChromeArgs({ userDataDir, url: safeUrl });
       assertInteractiveChromeArgs(args);
       chrome = spawn(this.chromeExecutable, args, {
@@ -258,6 +261,7 @@ export class InteractiveAuthBrowserManager {
       });
       chrome.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
 
+      failureStage = 'chrome-window';
       const chromeDeadline = Date.now() + 15000;
       while (Date.now() < chromeDeadline) {
         if (!processAlive(chrome)) throw new Error('Google Chrome exited before its window became ready.');
@@ -287,7 +291,15 @@ export class InteractiveAuthBrowserManager {
       await stopProcessGroup(xvfb);
       rmSync(userDataDir, { recursive: true, force: true });
       const detail = stderr.trim().slice(-800);
-      console.error(JSON.stringify({ event: 'interactive_auth_start_failed', code: 'INTERACTIVE_AUTH_LAUNCH_FAILED' }));
+      console.error(JSON.stringify({
+        event: 'interactive_auth_start_failed',
+        code: 'INTERACTIVE_AUTH_LAUNCH_FAILED',
+        stage: failureStage,
+        chromeExitCode: chrome?.exitCode ?? null,
+        chromeSignal: chrome?.signalCode ?? null,
+        xvfbExitCode: xvfb?.exitCode ?? null,
+        xvfbSignal: xvfb?.signalCode ?? null,
+      }));
       throw Object.assign(new Error(detail ? `${error.message} Chrome: ${detail}` : error.message), {
         statusCode: error?.statusCode || 500,
         code: 'INTERACTIVE_AUTH_LAUNCH_FAILED',
