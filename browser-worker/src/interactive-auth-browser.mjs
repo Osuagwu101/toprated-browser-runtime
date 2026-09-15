@@ -12,7 +12,7 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function commandBuffer(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { maxBuffer: 12 * 1024 * 1024, ...options, encoding: 'buffer' }, (error, stdout, stderr) => {
+    execFile(command, args, { maxBuffer: 12 * 1024 * 1024, ...options, encoding: null }, (error, stdout, stderr) => {
       if (error) {
         const detail = Buffer.isBuffer(stderr) ? stderr.toString('utf8').trim() : String(stderr || '').trim();
         reject(new Error(detail ? `${command} failed: ${detail.slice(-500)}` : `${command} failed.`));
@@ -379,6 +379,12 @@ export class InteractiveAuthBrowserManager {
     const xvfbExited = await stopProcessGroup(session.xvfb);
     rmSync(session.userDataDir, { recursive: true, force: true });
     return chromeExited && xvfbExited;
+  }
+
+  async stopAll() {
+    const results = [];
+    for (const sessionId of [...this.sessions.keys()]) results.push(await this.stop(sessionId));
+    return results;
   }
 
   pruneExited() {
