@@ -36,7 +36,7 @@ final class ToolAuthController
         PersistentBrowserIdentity $identities,
         SessionManager $sessions,
     ): JsonResponse {
-        $this->assertEmptyBody($request);
+        $accountScope = $this->accountScope($request);
         $profile = $toolProfiles->resolve($tool, 'runtime-operator');
         if (($profile['authentication']['required'] ?? false) !== true) {
             throw new RuntimeApiException('TOOL_AUTH_NOT_MANAGED', 422, 'This configured tool does not require shared authentication.');
@@ -44,7 +44,7 @@ final class ToolAuthController
         $identities->configuration();
 
         return response()->json(
-            $sessions->startOperatorAuthentication($tool, $profile['adminLoginUrl'], $profile['browserState']),
+            $sessions->startOperatorAuthentication($tool, $profile['adminLoginUrl'], $profile['browserState'], $accountScope),
             201,
         );
     }
@@ -60,13 +60,13 @@ final class ToolAuthController
         BrowserWorkerClient $worker,
         SessionManager $sessions,
     ): JsonResponse {
-        $this->assertEmptyBody($request);
+        $accountScope = $this->accountScope($request);
         $profile = $toolProfiles->resolve($tool, 'runtime-operator');
         if (($profile['authentication']['required'] ?? false) !== true) {
             throw new RuntimeApiException('TOOL_AUTH_NOT_MANAGED', 422, 'This configured tool does not require shared authentication.');
         }
 
-        $workerSessionId = $sessions->operatorWorkerSessionId($session, $tool);
+        $workerSessionId = $sessions->operatorWorkerSessionId($session, $tool, $accountScope);
         $verified = $worker->verifyAuthentication($workerSessionId, $profile['authentication']);
         if (($verified['required'] ?? false) !== true || ($verified['verified'] ?? false) !== true) {
             throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'Administrator authentication has not reached the configured approved state.');
@@ -81,9 +81,9 @@ final class ToolAuthController
             throw new RuntimeApiException('BROWSER_IDENTITY_INVALID', 422, 'Administrator browser did not contain reusable approved identity state.');
         }
 
-        $identity = $identities->save($tool, $normalized, $capturedAt);
-        $sessions->closeOperatorAuthentication($session, $tool);
-        $auth = $toolAuthentication->markVerified($tool);
+        $identity = $identities->save($tool, $normalized, $capturedAt, $accountScope);
+        $sessions->closeOperatorAuthentication($session, $tool, $accountScope);
+        $auth = $toolAuthentication->markVerified($tool, $accountScope);
 
         return response()->json([
             ...$auth,
@@ -99,10 +99,10 @@ final class ToolAuthController
         ToolProfileRegistry $toolProfiles,
         SessionManager $sessions,
     ): JsonResponse {
-        $this->assertEmptyBody($request);
+        $accountScope = $this->accountScope($request);
         $toolProfiles->resolve($tool, 'runtime-operator');
 
-        return response()->json($sessions->closeOperatorAuthentication($session, $tool));
+        return response()->json($sessions->closeOperatorAuthentication($session, $tool, $accountScope));
     }
 
     public function restore(
@@ -127,6 +127,29 @@ final class ToolAuthController
         }
 
         return response()->json($toolAuthentication->markRestored($tool));
+    }
+
+    private function accountScope(Request $request): string
+    {
+        $body = $request->all();
+        $unexpected = array_diff(array_keys($body), ['account_id']);
+        if ($unexpected !== []) {
+            throw new RuntimeApiException(
+                'OPERATOR_AUTH_BODY_FORBIDDEN',
+                422,
+                'Administrator authentication operations accept only an assigned account identifier, never credentials or verification codes.',
+            );
+        }
+
+        $accountScope = trim((string) $request->input('account_id', ''));
+        if ($accountScope === '') {
+            return 'legacy';
+        }
+        if (! preg_match('/^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/', $accountScope)) {
+            throw new RuntimeApiException('INVALID_ACCOUNT_SCOPE', 422, 'The assigned account identifier is invalid.');
+        }
+
+        return $accountScope;
     }
 
     private function assertEmptyBody(Request $request): void

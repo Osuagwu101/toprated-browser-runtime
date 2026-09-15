@@ -15,6 +15,7 @@ done < <(find api -type f -name '*.php' -not -path '*/vendor/*' -print0 | sort -
 
 printf 'python_compile_check=begin\n'
 python3 -m py_compile tests/*.py scripts/*.py
+python3 tests/account-scope-contract.py
 
 printf 'json_validation=begin\n'
 python3 -m json.tool api/composer.json >/dev/null

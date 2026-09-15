@@ -26,6 +26,7 @@ final class SessionController
         $writerId = $this->writerId($request);
         $bodyWriterId = trim((string) $request->input('writer_id', ''));
         $toolSlug = trim((string) $request->input('tool_slug', ''));
+        $accountScope = trim((string) $request->input('account_id', '')) ?: 'legacy';
         $body = $request->all();
 
         if ($bodyWriterId === '' || ! hash_equals($writerId, $bodyWriterId)) {
@@ -35,13 +36,17 @@ final class SessionController
             throw new RuntimeApiException('INVALID_LAUNCH_REQUEST', 422, 'Writer and tool identifiers must be valid bounded identifiers.');
         }
 
+        if ($accountScope !== 'legacy' && ! preg_match('/^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/', $accountScope)) {
+            throw new RuntimeApiException('INVALID_ACCOUNT_SCOPE', 422, 'The assigned account identifier is invalid.');
+        }
+
         foreach (['username', 'password', 'otp', 'otp_code', 'verification_code', 'credentials', 'tool_password', 'admin_password'] as $credentialField) {
             if (array_key_exists($credentialField, $body)) {
                 throw new RuntimeApiException('WRITER_CREDENTIALS_FORBIDDEN', 422, 'Writer launch requests must not contain tool credentials or verification codes.');
             }
         }
 
-        $allowedFields = ['writer_id', 'tool_slug', 'launch_url', 'browser_state'];
+        $allowedFields = ['writer_id', 'tool_slug', 'account_id', 'launch_url', 'browser_state'];
         if (array_diff(array_keys($body), $allowedFields) !== []) {
             throw new RuntimeApiException('UNSUPPORTED_LAUNCH_FIELDS', 422, 'Launch request contains unsupported fields.');
         }
@@ -72,9 +77,9 @@ final class SessionController
         if ($browserState === null
             && ($profile['browserState']['required'] ?? false) === true
             && config('browser.allow_legacy_browser_state_input', false) !== true) {
-            $browserState = $identities->load($toolSlug);
+            $browserState = $identities->load($toolSlug, $accountScope);
             if ($browserState === null) {
-                $toolAuthentication->requireReauthentication($toolSlug, 'BROWSER_IDENTITY_MISSING');
+                $toolAuthentication->requireReauthentication($toolSlug, 'BROWSER_IDENTITY_MISSING', $accountScope);
                 throw $toolAuthentication->reauthRequired();
             }
         }
@@ -88,6 +93,7 @@ final class SessionController
             $browserState,
             $profile['browserState'],
             $profile['authentication'],
+            $accountScope,
         );
 
         return response()->json($result, $result['reused'] ? 200 : 201);

@@ -29,7 +29,7 @@ final class PersistentBrowserIdentity
         ];
     }
 
-    public function save(string $toolSlug, array $state, ?string $capturedAt = null): array
+    public function save(string $toolSlug, array $state, ?string $capturedAt = null, string $accountScope = 'legacy'): array
     {
         try {
             $plaintext = json_encode($state, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
@@ -38,7 +38,7 @@ final class PersistentBrowserIdentity
         }
 
         $now = now();
-        $existing = DB::table('tool_browser_identities')->where('tool_slug', $toolSlug)->first();
+        $existing = DB::table('tool_browser_identities')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
         $version = ((int) ($existing?->version ?? 0)) + 1;
         try {
             $captureTime = $capturedAt === null ? $now : Carbon::parse($capturedAt);
@@ -48,7 +48,7 @@ final class PersistentBrowserIdentity
         $encrypted = $this->encrypter()->encryptString($plaintext);
 
         DB::table('tool_browser_identities')->updateOrInsert(
-            ['tool_slug' => $toolSlug],
+            ['tool_slug' => $toolSlug, 'account_scope' => $accountScope],
             [
                 'encrypted_payload' => $encrypted,
                 'payload_fingerprint' => hash('sha256', $plaintext),
@@ -60,12 +60,12 @@ final class PersistentBrowserIdentity
             ],
         );
 
-        return $this->metadata($toolSlug);
+        return $this->metadata($toolSlug, $accountScope);
     }
 
-    public function load(string $toolSlug): ?array
+    public function load(string $toolSlug, string $accountScope = 'legacy'): ?array
     {
-        $row = DB::table('tool_browser_identities')->where('tool_slug', $toolSlug)->first();
+        $row = DB::table('tool_browser_identities')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
         if ($row === null) {
             return null;
         }
@@ -91,9 +91,9 @@ final class PersistentBrowserIdentity
         return $state;
     }
 
-    public function metadata(string $toolSlug): array
+    public function metadata(string $toolSlug, string $accountScope = 'legacy'): array
     {
-        $row = DB::table('tool_browser_identities')->where('tool_slug', $toolSlug)->first();
+        $row = DB::table('tool_browser_identities')->where('tool_slug', $toolSlug)->where('account_scope', $accountScope)->first();
         if ($row === null) {
             return [
                 'available' => false,

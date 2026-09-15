@@ -26,8 +26,9 @@ final class SessionManager
         ?array $browserState = null,
         array $browserStatePolicy = [],
         array $authentication = [],
+        string $accountScope = 'legacy',
     ): array {
-        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication): array {
+        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope): array {
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -42,7 +43,12 @@ final class SessionManager
                 throw new RuntimeApiException('WRITER_SESSION_ACTIVE', 409, 'The writer already owns an active browser session for another tool.');
             }
 
-            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication);
+            if ($existing !== null && ! hash_equals((string) ($existing->account_scope ?? 'legacy'), $accountScope)) {
+                $this->terminateSession($existing, 'account_scope_changed', true);
+                $existing = null;
+            }
+
+            $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication, $accountScope);
 
             if ($existing !== null) {
                 $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions, $authentication): ?array {
@@ -55,7 +61,7 @@ final class SessionManager
                         $workerSession = $workerSessions[$fresh->worker_session_id];
                         if (($authentication['required'] ?? false) === true
                             && ($workerSession['authentication']['verified'] ?? false) !== true) {
-                            $this->toolAuthentication->requireReauthentication($fresh->tool_slug, 'TOOL_AUTH_LOST');
+                            $this->toolAuthentication->requireReauthentication($fresh->tool_slug, 'TOOL_AUTH_LOST', (string) ($fresh->account_scope ?? 'legacy'));
                             $this->terminateSession($fresh, 'tool_auth_lost', true);
                             throw $this->toolAuthentication->reauthRequired();
                         }
@@ -90,6 +96,7 @@ final class SessionManager
                 'id' => (string) Str::uuid(),
                 'writer_id' => $writerId,
                 'tool_slug' => $toolSlug,
+                'account_scope' => $accountScope,
                 'launch_url' => $this->safeLaunchUrlForRecord($launchUrl),
                 'status' => 'starting',
                 'last_heartbeat_at' => $createdAt,
@@ -105,7 +112,7 @@ final class SessionManager
                     : 'WORKER_START_FAILED';
                 $this->markFailed($session, $failureCode, 'The worker could not create a verified browser session.');
                 if ($exception->errorCode === 'TOOL_AUTH_NOT_VERIFIED') {
-                    $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED');
+                    $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED', $accountScope);
                     throw $this->toolAuthentication->reauthRequired();
                 }
                 throw $exception;
@@ -127,7 +134,7 @@ final class SessionManager
                     throw $cleanupException;
                 }
                 $this->markFailed($session, 'TOOL_AUTH_NOT_VERIFIED', 'The configured tool did not reach its authenticated state.');
-                $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED');
+                $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED', $accountScope);
                 throw $this->toolAuthentication->reauthRequired();
             }
 
@@ -151,14 +158,14 @@ final class SessionManager
             ])->save();
 
             if (($authentication['required'] ?? false) === true) {
-                $this->toolAuthentication->markVerified($toolSlug);
+                $this->toolAuthentication->markVerified($toolSlug, $accountScope);
             }
 
             return $this->present($session->fresh(), false);
         });
     }
 
-    public function startOperatorAuthentication(string $toolSlug, string $adminLoginUrl, array $browserStatePolicy): array
+    public function startOperatorAuthentication(string $toolSlug, string $adminLoginUrl, array $browserStatePolicy, string $accountScope = 'legacy'): array
     {
         $operatorPolicy = [
             'required' => false,
@@ -166,28 +173,29 @@ final class SessionManager
         ];
 
         return $this->create(
-            $this->operatorWriterId($toolSlug),
-            $this->operatorToolSlug($toolSlug),
+            $this->operatorWriterId($toolSlug, $accountScope),
+            $this->operatorToolSlug($toolSlug, $accountScope),
             $adminLoginUrl,
             null,
             $operatorPolicy,
             ['required' => false, 'urlContainsAny' => [], 'selectorsAny' => [], 'timeoutSeconds' => 10],
+            $accountScope,
         );
     }
 
-    public function operatorWorkerSessionId(string $sessionId, string $toolSlug): string
+    public function operatorWorkerSessionId(string $sessionId, string $toolSlug, string $accountScope = 'legacy'): string
     {
-        $session = $this->ownedActive($sessionId, $this->operatorWriterId($toolSlug));
-        if (! hash_equals($this->operatorToolSlug($toolSlug), $session->tool_slug) || $session->worker_session_id === null) {
+        $session = $this->ownedActive($sessionId, $this->operatorWriterId($toolSlug, $accountScope));
+        if (! hash_equals($this->operatorToolSlug($toolSlug, $accountScope), $session->tool_slug) || $session->worker_session_id === null) {
             throw new RuntimeApiException('OPERATOR_AUTH_SESSION_INVALID', 409, 'Administrator authentication session is not usable.');
         }
 
         return $session->worker_session_id;
     }
 
-    public function closeOperatorAuthentication(string $sessionId, string $toolSlug): array
+    public function closeOperatorAuthentication(string $sessionId, string $toolSlug, string $accountScope = 'legacy'): array
     {
-        return $this->close($sessionId, $this->operatorWriterId($toolSlug));
+        return $this->close($sessionId, $this->operatorWriterId($toolSlug, $accountScope));
     }
 
     public function status(string $sessionId, string $writerId): array
@@ -202,7 +210,7 @@ final class SessionManager
                         $session = $session->fresh();
                     } elseif (($workerStatus['authentication']['required'] ?? false) === true
                         && ($workerStatus['authentication']['verified'] ?? false) !== true) {
-                        $this->toolAuthentication->requireReauthentication($session->tool_slug, 'TOOL_AUTH_LOST');
+                        $this->toolAuthentication->requireReauthentication($session->tool_slug, 'TOOL_AUTH_LOST', (string) ($session->account_scope ?? 'legacy'));
                         $this->terminateSession($session, 'tool_auth_lost', true);
                         throw $this->toolAuthentication->reauthRequired();
                     }
@@ -256,7 +264,7 @@ final class SessionManager
             $workerStatus = $this->worker->status($session->worker_session_id);
             if (($workerStatus['authentication']['required'] ?? false) === true
                 && ($workerStatus['authentication']['verified'] ?? false) !== true) {
-                $this->toolAuthentication->requireReauthentication($session->tool_slug, 'TOOL_AUTH_LOST');
+                $this->toolAuthentication->requireReauthentication($session->tool_slug, 'TOOL_AUTH_LOST', (string) ($session->account_scope ?? 'legacy'));
                 $this->terminateSession($session, 'tool_auth_lost', true);
                 throw $this->toolAuthentication->reauthRequired();
             }
@@ -536,14 +544,14 @@ final class SessionManager
         return $this->viewerGrants->issue($session->worker_session_id, $session->writer_id, $ttl);
     }
 
-    private function operatorWriterId(string $toolSlug): string
+    private function operatorWriterId(string $toolSlug, string $accountScope = 'legacy'): string
     {
-        return 'runtime-operator-'.substr(hash('sha256', $toolSlug), 0, 32);
+        return 'runtime-operator-'.substr(hash('sha256', $toolSlug.'|'.$accountScope), 0, 32);
     }
 
-    private function operatorToolSlug(string $toolSlug): string
+    private function operatorToolSlug(string $toolSlug, string $accountScope = 'legacy'): string
     {
-        return 'admin-'.substr(hash('sha256', $toolSlug), 0, 32).'-admin-bootstrap';
+        return 'admin-'.substr(hash('sha256', $toolSlug.'|'.$accountScope), 0, 32).'-admin-bootstrap';
     }
 
     private function owned(string $sessionId, string $writerId): BrowserSession
