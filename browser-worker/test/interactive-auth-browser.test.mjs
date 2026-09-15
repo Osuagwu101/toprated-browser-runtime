@@ -10,6 +10,7 @@ test('interactive auth Chrome starts without automation or headless flags', () =
   assert.equal(assertInteractiveChromeArgs(args), true);
   const joined = args.join(' ');
   assert.match(joined, /--user-data-dir=\/tmp\/profile/);
+  assert.match(joined, /--password-store=basic/);
   assert.match(joined, /https:\/\/phrasly\.ai\/login/);
   assert.doesNotMatch(joined, /--headless/);
   assert.doesNotMatch(joined, /--remote-debugging-port/);
