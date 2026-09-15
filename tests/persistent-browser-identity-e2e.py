@@ -88,7 +88,10 @@ def approve_identity(tool, through_service=False, account_id=None):
 
     for _ in range(30):
         code, status = viewer("GET", viewer_url, token, "/status")
-        if code == 200 and "/dashboard" in status.get("url", ""):
+        if code == 200 and (
+            "/dashboard" in status.get("url", "")
+            or "PHASE8_AUTHENTICATED" in status.get("title", "")
+        ):
             break
         time.sleep(0.2)
     else:
