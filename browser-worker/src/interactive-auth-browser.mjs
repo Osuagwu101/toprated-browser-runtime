@@ -357,9 +357,12 @@ export class InteractiveAuthBrowserManager {
     }
 
     if (input.type === 'mouse') {
-      await run(['mousemove', String(Math.round(input.x)), String(Math.round(input.y))]);
-      if (input.event === 'pressed') await run(['mousedown', input.button === 'right' ? '3' : input.button === 'middle' ? '2' : '1']);
-      if (input.event === 'released') await run(['mouseup', input.button === 'right' ? '3' : input.button === 'middle' ? '2' : '1']);
+      const x = String(Math.round(input.x));
+      const y = String(Math.round(input.y));
+      const button = input.button === 'right' ? '3' : input.button === 'middle' ? '2' : '1';
+      if (input.event === 'pressed') await run(['mousemove', x, y, 'mousedown', button]);
+      else if (input.event === 'released') await run(['mousemove', x, y, 'mouseup', button]);
+      else await run(['mousemove', x, y]);
     } else if (input.type === 'scroll') {
       const verticalClicks = Math.min(12, Math.max(1, Math.round(Math.abs(input.deltaY) / 120)));
       if (Math.abs(input.deltaY) > 1) {
