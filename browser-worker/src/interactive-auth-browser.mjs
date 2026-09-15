@@ -41,9 +41,12 @@ async function stopProcessGroup(processRef, graceMs = 2500) {
   return !processAlive(processRef);
 }
 
-function chromeWindowIds(display) {
+function chromeWindowIds(display, pid = null) {
   try {
-    const output = execFileSync('/usr/bin/xdotool', ['search', '--onlyvisible', '--class', 'google-chrome'], {
+    const args = ['search', '--onlyvisible'];
+    if (Number.isInteger(Number(pid)) && Number(pid) > 0) args.push('--pid', String(pid));
+    else args.push('--class', 'google-chrome');
+    const output = execFileSync('/usr/bin/xdotool', args, {
       env: { ...process.env, DISPLAY: display },
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1000,
@@ -54,12 +57,12 @@ function chromeWindowIds(display) {
   }
 }
 
-function chromeWindowReady(display) {
-  return chromeWindowIds(display).length > 0;
+function chromeWindowReady(display, pid = null) {
+  return chromeWindowIds(display, pid).length > 0;
 }
 
-function chromeWindowTitle(display) {
-  const ids = chromeWindowIds(display);
+function chromeWindowTitle(display, pid = null) {
+  const ids = chromeWindowIds(display, pid);
   if (!ids.length) return '';
   try {
     const output = execFileSync('/usr/bin/xdotool', ['getwindowname', ids[ids.length - 1]], {
@@ -193,7 +196,7 @@ export class InteractiveAuthBrowserManager {
   status(sessionId) {
     const session = this.assertSession(sessionId);
     const result = this.present(session);
-    const title = chromeWindowTitle(session.display);
+    const title = chromeWindowTitle(session.display, session.chrome.pid);
     if (title) result.title = title;
     return result;
   }
@@ -265,10 +268,10 @@ export class InteractiveAuthBrowserManager {
       const chromeDeadline = Date.now() + 15000;
       while (Date.now() < chromeDeadline) {
         if (!processAlive(chrome)) throw new Error('Google Chrome exited before its window became ready.');
-        if (chromeWindowReady(display)) break;
+        if (chromeWindowReady(display, chrome.pid)) break;
         await sleep(150);
       }
-      if (!chromeWindowReady(display)) throw new Error('Google Chrome window did not become ready.');
+      if (!chromeWindowReady(display, chrome.pid)) throw new Error('Google Chrome window did not become ready.');
 
       const session = { sessionId, display, userDataDir, url: safeUrl, chrome, xvfb };
       this.sessions.set(sessionId, session);
@@ -321,7 +324,7 @@ export class InteractiveAuthBrowserManager {
     const input = validateViewerInput(rawInput);
     const env = { ...process.env, DISPLAY: session.display };
     const run = (args) => commandBuffer('/usr/bin/xdotool', args, { env });
-    const windowIds = chromeWindowIds(session.display);
+    const windowIds = chromeWindowIds(session.display, session.chrome.pid);
     if (windowIds.length) {
       try { await run(['windowfocus', '--sync', windowIds[windowIds.length - 1]]); } catch {}
     }
