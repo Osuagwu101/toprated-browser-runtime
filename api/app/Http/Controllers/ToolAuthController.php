@@ -67,12 +67,25 @@ final class ToolAuthController
         }
 
         $workerSessionId = $sessions->operatorWorkerSessionId($session, $tool, $accountScope);
-        $verified = $worker->verifyAuthentication($workerSessionId, $profile['authentication']);
+        $finalized = $worker->finalizeInteractiveAuthentication(
+            $workerSessionId,
+            $profile['authentication'],
+            $profile['browserState'],
+            $profile['launchUrl'],
+        );
+        $verified = is_array($finalized['authentication'] ?? null)
+            ? $finalized['authentication']
+            : [];
         if (($verified['required'] ?? false) !== true || ($verified['verified'] ?? false) !== true) {
             throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'Administrator authentication has not reached the configured approved state.');
         }
 
-        $exported = $worker->exportAuthorizedState($workerSessionId);
+        $exported = is_array($finalized['browserState'] ?? null)
+            ? $finalized['browserState']
+            : null;
+        if ($exported === null) {
+            throw new RuntimeApiException('BROWSER_IDENTITY_INVALID', 422, 'Interactive authentication did not produce reusable browser identity state.');
+        }
         $capturedAt = is_string($exported['session_tokens']['captured_at'] ?? null)
             ? $exported['session_tokens']['captured_at']
             : null;
