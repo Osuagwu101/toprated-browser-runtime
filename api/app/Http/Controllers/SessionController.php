@@ -36,7 +36,7 @@ final class SessionController
             throw new RuntimeApiException('INVALID_LAUNCH_REQUEST', 422, 'Writer and tool identifiers must be valid bounded identifiers.');
         }
 
-        if ($accountScope !== 'legacy' && ! preg_match('/^[A-Fa-f0-9-]{36}$/', $accountScope)) {
+        if ($accountScope !== 'legacy' && ! preg_match('/^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/', $accountScope)) {
             throw new RuntimeApiException('INVALID_ACCOUNT_SCOPE', 422, 'The assigned account identifier is invalid.');
         }
 
