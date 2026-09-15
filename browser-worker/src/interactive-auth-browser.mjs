@@ -121,6 +121,7 @@ export function buildInteractiveChromeArgs({ userDataDir, url }) {
   return [
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-background-mode',
     `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,
     `--user-data-dir=${userDataDir}`,
     url,
