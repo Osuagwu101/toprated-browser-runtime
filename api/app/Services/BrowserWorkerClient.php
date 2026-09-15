@@ -66,6 +66,38 @@ final class BrowserWorkerClient
         return $this->request('POST', '/browser/sessions', $payload, true, false, $requestTimeout);
     }
 
+    public function startInteractiveAuthentication(string $launchUrl): array
+    {
+        return $this->request(
+            'POST',
+            '/browser/interactive-auth-sessions',
+            ['url' => $launchUrl],
+            true,
+            false,
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+        );
+    }
+
+    public function finalizeInteractiveAuthentication(
+        string $workerSessionId,
+        array $authentication,
+        array $browserStatePolicy,
+        string $launchUrl,
+    ): array {
+        return $this->request(
+            'POST',
+            '/browser/sessions/'.rawurlencode($workerSessionId).'/finalize-authentication',
+            [
+                'authentication' => $authentication,
+                'browserStatePolicy' => $browserStatePolicy,
+                'launchUrl' => $launchUrl,
+            ],
+            true,
+            false,
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+        );
+    }
+
     public function stop(string $workerSessionId): array
     {
         return $this->request('DELETE', '/browser/sessions/'.rawurlencode($workerSessionId));
