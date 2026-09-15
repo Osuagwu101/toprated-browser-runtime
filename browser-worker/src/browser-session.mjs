@@ -69,6 +69,16 @@ export function validateViewerInput(input) {
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function classifyBrowserLaunchError(stderr) {
+  const value = String(stderr || '');
+  if (/singletonlock|user data directory|profile.*in use|process singleton/i.test(value)) return 'profile-lock';
+  if (/sandbox|zygote_host_impl_linux|namespace|operation not permitted/i.test(value)) return 'sandbox';
+  if (/missing x server|cannot open display|x11|display/i.test(value)) return 'display';
+  if (/crashpad/i.test(value)) return 'crashpad';
+  if (/permission denied|eacces/i.test(value)) return 'permissions';
+  return 'unknown';
+}
 function readProcessState(pid) { try { const status = readFileSync(`/proc/${pid}/status`, 'utf8'); return status.match(/^State:\s+([A-Z])/m)?.[1] || null; } catch { return null; } }
 function collectProcessTree(rootPid) {
   const parentMap = new Map(); let entries = [];
@@ -253,7 +263,12 @@ export class BrowserSessionController {
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
       const safeCode = error?.code || (failureStage === 'navigation' ? 'BROWSER_NAVIGATION_FAILED' : 'BROWSER_LAUNCH_FAILED');
       wrapped.code = safeCode;
-      console.error(JSON.stringify({ event: 'browser_start_failed', stage: failureStage, code: safeCode }));
+      console.error(JSON.stringify({
+        event: 'browser_start_failed',
+        stage: failureStage,
+        code: safeCode,
+        diagnostic: classifyBrowserLaunchError(stderr),
+      }));
       throw wrapped;
     } finally { this.startingCount -= 1; }
   }
