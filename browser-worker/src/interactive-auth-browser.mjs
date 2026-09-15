@@ -368,7 +368,7 @@ export class InteractiveAuthBrowserManager {
       await run(['key', '--clearmodifiers', key]);
     }
 
-    return { accepted: true };
+    return { inputAccepted: true, accepted: true };
   }
 
   profilePath(profileId) {
