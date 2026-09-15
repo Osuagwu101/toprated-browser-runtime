@@ -16,6 +16,13 @@ Route::middleware(['runtime.security:service', 'service.auth'])->group(function 
     Route::post('/sessions/{session}/activity', [SessionController::class, 'activity']);
     Route::post('/sessions/{session}/viewer-grant', [SessionController::class, 'viewerGrant']);
     Route::delete('/sessions/{session}', [SessionController::class, 'destroy']);
+
+    // Phase 15 website handoff: the main application verifies the administrator,
+    // then uses its signed service identity to drive the existing operator capture
+    // lifecycle. Credentials and OTPs remain inside the restricted browser viewer.
+    Route::post('/tool-auth/{tool}/sessions', [ToolAuthController::class, 'startSession']);
+    Route::post('/tool-auth/{tool}/sessions/{session}/approve', [ToolAuthController::class, 'approveSession']);
+    Route::delete('/tool-auth/{tool}/sessions/{session}', [ToolAuthController::class, 'closeSession']);
 });
 
 Route::middleware(['runtime.security:operator', 'operator.auth'])->prefix('/operator')->group(function (): void {

@@ -69,8 +69,12 @@ def worker(method, path, body=None):
     return http(method, WORKER + path, body, {"x-toprated-worker-secret": WORKER_SECRET})
 
 
-def approve_identity(tool):
-    code, started = operator("POST", f"/api/operator/tool-auth/{tool}/sessions")
+def approve_identity(tool, through_service=False):
+    prefix = "/api/tool-auth" if through_service else "/api/operator/tool-auth"
+    if through_service:
+        code, started = signed("POST", f"{prefix}/{tool}/sessions", "website-admin")
+    else:
+        code, started = operator("POST", f"{prefix}/{tool}/sessions")
     assert code == 201 and started["status"] == "active", (code, started)
     session_id = started["sessionId"]
     viewer_url, token, payload = decode_grant(started["viewerGrant"])
@@ -89,7 +93,16 @@ def approve_identity(tool):
     else:
         raise AssertionError("administrator browser never reached the authenticated fixture")
 
-    code, approved = operator("POST", f"/api/operator/tool-auth/{tool}/sessions/{session_id}/approve")
+    if through_service:
+        code, approved = signed(
+            "POST",
+            f"{prefix}/{tool}/sessions/{session_id}/approve",
+            "website-admin",
+        )
+    else:
+        code, approved = operator(
+            "POST", f"{prefix}/{tool}/sessions/{session_id}/approve"
+        )
     assert code == 200 and approved["status"] == "ready", (code, approved)
     assert approved["identity"]["available"] is True, approved
     assert approved["administratorSessionClosed"] is True, approved
@@ -117,6 +130,9 @@ def bootstrap():
     code, denied = http("POST", API + f"/api/operator/tool-auth/{TOOLS[0]}/sessions")
     assert code == 401 and denied["code"] == "OPERATOR_AUTH_REQUIRED", (code, denied)
 
+    code, denied = http("POST", API + f"/api/tool-auth/{TOOLS[0]}/sessions")
+    assert code == 401 and denied["code"] == "AUTH_REQUIRED", (code, denied)
+
     state = {
         "authenticated_cookies": [{"name": "phase8-auth", "value": "must-not-enter-writer-api", "domain": "127.0.0.1", "path": "/"}],
         "session_tokens": {"storage": {"localStorage": {"phase8-local": "shared-state-local"}}},
@@ -134,8 +150,8 @@ def bootstrap():
     assert code == 423 and missing["code"] == "TOOL_REAUTH_REQUIRED", (code, missing)
 
     versions = {}
-    for tool in TOOLS:
-        identity, _ = approve_identity(tool)
+    for index, tool in enumerate(TOOLS):
+        identity, _ = approve_identity(tool, through_service=index == 0)
         versions[tool] = identity["version"]
         code, status = operator("GET", f"/api/operator/tool-auth/{tool}")
         assert code == 200 and status["identity"] == identity, (code, status)
