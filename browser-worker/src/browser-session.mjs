@@ -175,6 +175,7 @@ export class BrowserSessionController {
     return session;
   }
   getStatus(sessionId) { return this.present(this.assertSession(sessionId)); }
+  has(sessionId) { this.pruneExited(); return this.sessions.has(String(sessionId || '')); }
   onlySessionId() { this.pruneExited(); if (this.sessions.size === 0) throw Object.assign(new Error('No browser session is active.'), { statusCode: 409 }); if (this.sessions.size !== 1) throw Object.assign(new Error('Legacy single-session operation is ambiguous while multiple browser sessions are active.'), { statusCode: 409 }); return this.sessions.keys().next().value; }
 
   async start(url = DEFAULT_TEST_URL, options = {}) {
@@ -185,8 +186,14 @@ export class BrowserSessionController {
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
     const suppliedUserDataDir = options?.userDataDir == null ? '' : String(options.userDataDir);
-    if (suppliedUserDataDir && (!suppliedUserDataDir.startsWith(tmpdir() + '/') || !existsSync(suppliedUserDataDir))) {
-      throw new Error('Reusable browser profile directory is invalid.');
+    if (suppliedUserDataDir) {
+      const authRoot = String(process.env.AUTH_BROWSER_PROFILE_ROOT || '').replace(/\/$/, '');
+      const allowedPrefix = authRoot ? authRoot + '/' : '';
+      const insideTmp = suppliedUserDataDir.startsWith(tmpdir() + '/');
+      const insideAuthRoot = allowedPrefix && suppliedUserDataDir.startsWith(allowedPrefix);
+      if ((!insideTmp && !insideAuthRoot) || !existsSync(suppliedUserDataDir)) {
+        throw new Error('Reusable browser profile directory is invalid.');
+      }
     }
     const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
     const preserveUserDataDir = options?.preserveUserDataDir === true;
