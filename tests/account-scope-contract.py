@@ -9,7 +9,7 @@ checks = {
     ],
     "api/app/Http/Controllers/ToolAuthController.php": [
         "accountScope($request)",
-        "identities->save($tool, $normalized, $capturedAt, $accountScope)",
+        "identities->save($tool, ['persistent_profile' => true], null, $accountScope)",
         "markVerified($tool, $accountScope)",
     ],
     "api/app/Services/PersistentBrowserIdentity.php": [

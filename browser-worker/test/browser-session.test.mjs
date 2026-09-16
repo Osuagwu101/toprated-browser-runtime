@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BrowserSessionController, RUNTIME_PHASE, normalizeBrowserDisplayMode, normalizeBrowserNavigationTimeoutMs, validateNavigationUrl, validateViewerInput } from '../src/browser-session.mjs';
+import { BrowserSessionController, RUNTIME_PHASE, buildBrowserProcessEnvironment, normalizeBrowserDisplayMode, normalizeBrowserNavigationTimeoutMs, validateNavigationUrl, validateViewerInput } from '../src/browser-session.mjs';
 
 test('accepts deterministic HTML data pages and normal web URLs', () => {
   assert.equal(validateNavigationUrl('https://example.com/'), 'https://example.com/');
@@ -43,6 +43,13 @@ test('bounds the generic browser navigation readiness timeout', () => {
   assert.equal(normalizeBrowserNavigationTimeoutMs('60000'), 60000);
   assert.throws(() => normalizeBrowserNavigationTimeoutMs('4999'), /between 5000 and 120000/);
   assert.throws(() => normalizeBrowserNavigationTimeoutMs('120001'), /between 5000 and 120000/);
+});
+
+test('reuses the human-auth profile environment during fresh-browser validation', () => {
+  const env = buildBrowserProcessEnvironment('/srv/interactive-auth-profiles/session-id');
+  assert.equal(env.HOME, '/srv/interactive-auth-profiles/session-id');
+  assert.equal(env.XDG_CONFIG_HOME, '/srv/interactive-auth-profiles/session-id/.config');
+  assert.equal(env.XDG_CACHE_HOME, '/srv/interactive-auth-profiles/session-id/.cache');
 });
 
 test('Phase 6 retains configurable capacity bounded to the blueprint target', () => {

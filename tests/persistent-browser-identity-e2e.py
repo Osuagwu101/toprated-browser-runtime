@@ -80,19 +80,60 @@ def approve_identity(tool, through_service=False, account_id=None):
     session_id = started["sessionId"]
     viewer_url, token, payload = decode_grant(started["viewerGrant"])
 
-    for event in ("pressed", "released"):
-        code, accepted = viewer("POST", viewer_url, token, "/input", {
-            "type": "mouse", "event": event, "button": "left", "x": 230, "y": 150,
-        })
-        assert code == 200 and accepted["inputAccepted"] is True, (code, accepted)
-
-    for _ in range(30):
+    # The interactive auth worker returns as soon as the native Chrome window
+    # exists. Wait for the login fixture itself to finish loading before
+    # sending the synthetic human click; otherwise CI can race Chrome startup
+    # and click the browser chrome/blank content area instead of the page.
+    login_status = None
+    for _ in range(50):
         code, status = viewer("GET", viewer_url, token, "/status")
-        if code == 200 and "/dashboard" in status.get("url", ""):
+        login_status = {"code": code, "status": status}
+        if code == 200 and "ADMIN_LOGIN" in status.get("title", ""):
             break
         time.sleep(0.2)
     else:
-        raise AssertionError("administrator browser never reached the authenticated fixture")
+        raise AssertionError(
+            f"administrator login fixture never became ready: {login_status}"
+        )
+
+    for event in ("pressed", "released"):
+        code, accepted = viewer("POST", viewer_url, token, "/input", {
+            "type": "mouse", "event": event, "button": "left", "x": 230, "y": 220,
+        })
+        assert code == 200 and accepted["inputAccepted"] is True, (code, accepted)
+
+    # Requiring several consecutive authenticated observations prevents the E2E
+    # harness from approving on the first paint after navigation. The fixture
+    # writes durable cookie/localStorage state immediately before navigating to
+    # /dashboard, and Chrome may still be committing that profile state when a
+    # very fast CI runner sees the first authenticated title. A real admin has
+    # natural dwell time here; the E2E test must model that handoff boundary.
+    last_status = None
+    authenticated_samples = 0
+    for _ in range(60):
+        code, status = viewer("GET", viewer_url, token, "/status")
+        last_status = {"code": code, "status": status}
+        authenticated = code == 200 and (
+            "/dashboard" in status.get("url", "")
+            or "PHASE8_AUTHENTICATED" in status.get("title", "")
+        )
+        if authenticated:
+            authenticated_samples += 1
+            if authenticated_samples >= 3:
+                break
+        else:
+            authenticated_samples = 0
+        time.sleep(0.2)
+    else:
+        raise AssertionError(
+            f"administrator browser never reached a stable authenticated fixture: {last_status}"
+        )
+
+    # Give the headed Chrome profile a short, bounded settle window before the
+    # approval endpoint cleanly closes it and reopens the same profile in the
+    # isolated validation process. This removes a CI-only persistence race
+    # without weakening the production validation requirement.
+    time.sleep(0.75)
 
     if through_service:
         code, approved = signed(
@@ -118,7 +159,7 @@ def launch(tool, writer, account_id=None):
     code, created = signed("POST", "/api/sessions", writer, payload)
     assert code == 201 and created["status"] == "active", (code, created)
     serialized = json.dumps(created)
-    for secret_marker in ("phase8-auth", "shared-state-local", "shared-state-session", "encrypted_payload"):
+    for secret_marker in ("phase8-auth", "shared-state-local", "shared-state-session", "encrypted_payload", "profileId", "profilePath", "browserState"):
         assert secret_marker not in serialized, created
     return created
 
@@ -176,6 +217,10 @@ def account_isolation():
     assert identity_a["version"] == 1 and identity_b["version"] == 1, (identity_a, identity_b)
 
     session_a = launch(tool, "scoped-writer-a", account_a)
+    code, duplicate = signed("POST", "/api/sessions", "scoped-writer-a-second", {
+        "writer_id": "scoped-writer-a-second", "tool_slug": tool, "account_id": account_a,
+    })
+    assert code == 409 and "profile" not in json.dumps(duplicate).lower(), (code, duplicate)
     session_b = launch(tool, "scoped-writer-b", account_b)
     close(session_a, "scoped-writer-a")
     close(session_b, "scoped-writer-b")

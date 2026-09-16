@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\RuntimeApiException;
-use App\Services\AuthorizedBrowserState;
 use App\Services\BrowserWorkerClient;
 use App\Services\PersistentBrowserIdentity;
 use App\Services\SessionManager;
@@ -56,7 +55,6 @@ final class ToolAuthController
         ToolProfileRegistry $toolProfiles,
         ToolAuthenticationState $toolAuthentication,
         PersistentBrowserIdentity $identities,
-        AuthorizedBrowserState $authorizedBrowserState,
         BrowserWorkerClient $worker,
         SessionManager $sessions,
     ): JsonResponse {
@@ -67,21 +65,27 @@ final class ToolAuthController
         }
 
         $workerSessionId = $sessions->operatorWorkerSessionId($session, $tool, $accountScope);
-        $verified = $worker->verifyAuthentication($workerSessionId, $profile['authentication']);
+        $finalized = $worker->finalizeInteractiveAuthentication(
+            $workerSessionId,
+            $profile['authentication'],
+            $profile['browserState'],
+            $profile['launchUrl'],
+        );
+        $verified = is_array($finalized['authentication'] ?? null)
+            ? $finalized['authentication']
+            : [];
         if (($verified['required'] ?? false) !== true || ($verified['verified'] ?? false) !== true) {
             throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'Administrator authentication has not reached the configured approved state.');
         }
 
-        $exported = $worker->exportAuthorizedState($workerSessionId);
-        $capturedAt = is_string($exported['session_tokens']['captured_at'] ?? null)
-            ? $exported['session_tokens']['captured_at']
-            : null;
-        $normalized = $authorizedBrowserState->normalize($exported, $profile['browserState'], $profile['launchUrl']);
-        if ($normalized === null) {
-            throw new RuntimeApiException('BROWSER_IDENTITY_INVALID', 422, 'Administrator browser did not contain reusable approved identity state.');
+        if (($finalized['profileValidation']['persistent'] ?? false) !== true) {
+            throw new RuntimeApiException('BROWSER_IDENTITY_INVALID', 422, 'Interactive authentication did not retain the account browser profile.');
         }
 
-        $identity = $identities->save($tool, $normalized, $capturedAt, $accountScope);
+        // The profile remains solely on the runtime host. This marker preserves
+        // the existing account/tool approval record without copying cookies or
+        // browser storage back through the API or into the application database.
+        $identity = $identities->save($tool, ['persistent_profile' => true], null, $accountScope);
         $sessions->closeOperatorAuthentication($session, $tool, $accountScope);
         $auth = $toolAuthentication->markVerified($tool, $accountScope);
 

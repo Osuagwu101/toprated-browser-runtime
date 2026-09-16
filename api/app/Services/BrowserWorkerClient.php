@@ -39,6 +39,7 @@ final class BrowserWorkerClient
         ?array $browserState = null,
         array $browserStatePolicy = [],
         array $authentication = [],
+        ?array $persistentProfile = null,
     ): array {
         $payload = [
             'url' => $launchUrl,
@@ -47,6 +48,9 @@ final class BrowserWorkerClient
         ];
         if ($browserState !== null) {
             $payload['browserState'] = $browserState;
+        }
+        if ($persistentProfile !== null) {
+            $payload['persistentProfile'] = $persistentProfile;
         }
 
         $authenticationTimeout = (int) ($authentication['timeoutSeconds'] ?? 0);
@@ -64,6 +68,38 @@ final class BrowserWorkerClient
         );
 
         return $this->request('POST', '/browser/sessions', $payload, true, false, $requestTimeout);
+    }
+
+    public function startInteractiveAuthentication(string $launchUrl, string $toolSlug, string $accountScope): array
+    {
+        return $this->request(
+            'POST',
+            '/browser/interactive-auth-sessions',
+            ['url' => $launchUrl, 'toolSlug' => $toolSlug, 'accountScope' => $accountScope],
+            true,
+            false,
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+        );
+    }
+
+    public function finalizeInteractiveAuthentication(
+        string $workerSessionId,
+        array $authentication,
+        array $browserStatePolicy,
+        string $launchUrl,
+    ): array {
+        return $this->request(
+            'POST',
+            '/browser/sessions/'.rawurlencode($workerSessionId).'/finalize-authentication',
+            [
+                'authentication' => $authentication,
+                'browserStatePolicy' => $browserStatePolicy,
+                'launchUrl' => $launchUrl,
+            ],
+            true,
+            false,
+            self::MAX_START_REQUEST_TIMEOUT_SECONDS,
+        );
     }
 
     public function stop(string $workerSessionId): array
@@ -132,7 +168,7 @@ final class BrowserWorkerClient
             if ($workerCode === 'AUTHENTICATION_NOT_VERIFIED') {
                 throw new RuntimeApiException('TOOL_AUTH_NOT_VERIFIED', 409, 'The configured tool did not reach its authenticated state.');
             }
-            if (in_array($workerCode, ['BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT'], true)) {
+            if (in_array($workerCode, ['INTERACTIVE_AUTH_LAUNCH_FAILED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT'], true)) {
                 $status = $workerCode === 'BROWSER_NAVIGATION_TIMEOUT' ? 504 : 502;
                 throw new RuntimeApiException($workerCode, $status, 'The browser worker could not reach an interactive tool page.');
             }

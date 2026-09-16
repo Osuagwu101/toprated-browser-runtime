@@ -2,6 +2,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController, RUNTIME_PHASE } from './browser-session.mjs';
+import { InteractiveAuthWorkerClient } from './interactive-auth-client.mjs';
 import { checkAuthentication, normalizeAuthenticationPolicy } from './browser-state.mjs';
 import { readBearerToken, resolveViewerSecret, verifyViewerToken } from './viewer-auth.mjs';
 import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './rate-limit.mjs';
@@ -15,6 +16,8 @@ const browserStateMaxBytes = Number(process.env.BROWSER_STATE_MAX_BYTES || 26214
 if (!Number.isInteger(browserStateMaxBytes) || browserStateMaxBytes < 4096 || browserStateMaxBytes > 1048576) throw new Error('BROWSER_STATE_MAX_BYTES must be an integer between 4096 and 1048576.');
 const sessionCreateMaxBytes = browserStateMaxBytes + 65536;
 const controller = new BrowserSessionController();
+const interactiveAuth = new InteractiveAuthWorkerClient();
+const finalizingInteractiveSessions = new Map();
 const viewerSecret = resolveViewerSecret();
 const workerControlSecret = String(process.env.WORKER_CONTROL_SECRET || '');
 if (Buffer.byteLength(workerControlSecret, 'utf8') < 32) throw new Error('WORKER_CONTROL_SECRET must contain at least 32 bytes.');
@@ -61,8 +64,8 @@ function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-ag
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', ...buildViewerSecurityHeaders(nonce) })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
-function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
-function authorizeViewer(request, sessionId) { controller.assertSession(sessionId); verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
+function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication|finalize-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
+function authorizeViewer(request, sessionId) { verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
   const left = Buffer.from(supplied, 'utf8');
@@ -71,11 +74,21 @@ function authorizeWorkerControl(request) {
     throw Object.assign(new Error('Browser worker control authorization is required.'), { statusCode: 401 });
   }
 }
+function assertPersistentProfile(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Object.assign(new Error('Persistent profile is invalid.'), { statusCode: 422, code: 'PROFILE_IDENTITY_INVALID' });
+  const fields = Object.keys(value);
+  if (fields.length !== 2 || !fields.includes('toolSlug') || !fields.includes('accountScope')) throw Object.assign(new Error('Persistent profile is invalid.'), { statusCode: 422, code: 'PROFILE_IDENTITY_INVALID' });
+  const toolSlug = String(value.toolSlug || '').trim();
+  const accountScope = String(value.accountScope || '').trim();
+  if (!/^[A-Za-z0-9._-]{1,191}$/.test(toolSlug) || !(accountScope === 'legacy' || /^[0-9a-f-]{36}$/i.test(accountScope))) throw Object.assign(new Error('Persistent profile is invalid.'), { statusCode: 422, code: 'PROFILE_IDENTITY_INVALID' });
+  return { toolSlug, accountScope };
+}
 function assertSessionCreateBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('Browser session request must be a JSON object.'), { statusCode: 400 });
-  assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication'], 'Browser session request contains unsupported fields.');
+  assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication', 'persistentProfile'], 'Browser session request contains unsupported fields.');
 }
 async function refreshLiveToolAuthentication(sessionId) {
+  if (!controller.has(sessionId)) return { required: false, verified: false };
   const session = controller.assertSession(sessionId);
   const policy = sessionAuthenticationPolicies.get(sessionId);
   if (!policy || policy.required !== true) return { required: false, verified: true };
@@ -93,9 +106,65 @@ async function assertViewerToolAuthentication(sessionId) {
     );
   }
 }
+function finalizingStatus(sessionId) {
+  const item = finalizingInteractiveSessions.get(sessionId);
+  if (!item) return null;
+  return {
+    active: true,
+    sessionId,
+    pid: null,
+    url: item.launchUrl,
+    title: 'Validating administrator authentication',
+    viewport: { width: 1440, height: 900 },
+    viewer: 'restricted',
+    displayMode: 'profile-validation',
+    browser: 'google-chrome-stable',
+    automationAttached: true,
+    authentication: { required: true, verified: false },
+  };
+}
+
+async function interactiveStatusOrNull(sessionId) {
+  try {
+    return await interactiveAuth.status(sessionId);
+  } catch (error) {
+    if ([404, 410].includes(Number(error?.statusCode || 0))) return null;
+    throw error;
+  }
+}
+
 async function stopSession(sessionId) {
   sessionAuthenticationPolicies.delete(sessionId);
-  return controller.stop(sessionId);
+  if (controller.has(sessionId)) return controller.stop(sessionId);
+  if (finalizingInteractiveSessions.has(sessionId)) {
+    throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
+  }
+  return interactiveAuth.stop(sessionId);
+}
+async function sessionStatus(sessionId) {
+  if (controller.has(sessionId)) {
+    await refreshLiveToolAuthentication(sessionId);
+    return controller.getStatus(sessionId);
+  }
+  const finalizing = finalizingStatus(sessionId);
+  if (finalizing) return finalizing;
+  const interactive = await interactiveStatusOrNull(sessionId);
+  if (interactive) return interactive;
+  throw Object.assign(new Error('Browser session is closed.'), { statusCode: 410 });
+}
+async function sessionFrame(sessionId) {
+  if (controller.has(sessionId)) return controller.captureFrame(sessionId);
+  if (finalizingInteractiveSessions.has(sessionId)) {
+    throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
+  }
+  return interactiveAuth.frame(sessionId);
+}
+async function sessionInput(sessionId, body) {
+  if (controller.has(sessionId)) return controller.sendViewerInput(sessionId, body);
+  if (finalizingInteractiveSessions.has(sessionId)) {
+    throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
+  }
+  return interactiveAuth.input(sessionId, body);
 }
 
 const server = http.createServer(async (request, response) => {
@@ -120,18 +189,53 @@ const server = http.createServer(async (request, response) => {
     // Session-scoped lifecycle API used by Laravel. Sensitive browser state is accepted only on this private, authenticated creation path and is never logged or returned.
     if (request.method === 'GET' && requestUrl.pathname === '/browser/sessions') {
       await waitForSessionCreatesToSettle();
-      return writeJson(response, 200, controller.listStatus());
+      const automated = controller.listStatus();
+      let interactive = { activeCount: 0, startingCount: 0, sessions: [] };
+      try {
+        interactive = await interactiveAuth.sessions();
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: 'interactive_auth_worker_unavailable',
+          code: String(error?.code || 'INTERACTIVE_AUTH_WORKER_UNAVAILABLE'),
+        }));
+      }
+      const finalizing = [...finalizingInteractiveSessions.keys()].map((sessionId) => finalizingStatus(sessionId));
+      return writeJson(response, 200, {
+        ...automated,
+        activeCount: automated.activeCount + Number(interactive.activeCount || 0) + finalizing.length,
+        startingCount: automated.startingCount + Number(interactive.startingCount || 0),
+        sessions: [...automated.sessions, ...(interactive.sessions || []), ...finalizing],
+      });
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/browser/interactive-auth-sessions') {
+      const body = await readJson(request, 64 * 1024);
+      assertAllowedFields(body, ['url', 'toolSlug', 'accountScope']);
+      if (!body.url || !body.toolSlug || !body.accountScope) throw Object.assign(new Error('url, toolSlug and accountScope are required.'), { statusCode: 400 });
+      beginSessionCreate();
+      try {
+        return writeJson(response, 201, await interactiveAuth.start(body.url, assertPersistentProfile({ toolSlug: body.toolSlug, accountScope: body.accountScope })));
+      } finally {
+        endSessionCreate();
+      }
     }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/sessions') {
       const body = await readJson(request, sessionCreateMaxBytes);
       assertSessionCreateBody(body);
       const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+      const persistentProfile = body.persistentProfile ? assertPersistentProfile(body.persistentProfile) : null;
       beginSessionCreate();
       try {
         const created = await controller.start(body.url, {
           browserState: body.browserState,
           browserStatePolicy: body.browserStatePolicy,
           authentication: authenticationPolicy,
+          ...(persistentProfile ? {
+            persistentProfile: {
+              root: process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/account-browser-profiles',
+              ...persistentProfile,
+            },
+            executablePath: process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
+          } : {}),
         });
         sessionAuthenticationPolicies.set(created.sessionId, authenticationPolicy);
         writeJson(response, 201, created);
@@ -144,15 +248,51 @@ const server = http.createServer(async (request, response) => {
     if (browserSessionRoute) {
       const { sessionId, action } = browserSessionRoute;
       if (request.method === 'GET' && action === 'status') {
-        await refreshLiveToolAuthentication(sessionId);
-        return writeJson(response, 200, controller.getStatus(sessionId));
+        return writeJson(response, 200, await sessionStatus(sessionId));
       }
-      if (request.method === 'GET' && action === 'authorized-state') return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
+      if (request.method === 'GET' && action === 'authorized-state') {
+        if (!controller.has(sessionId)) throw Object.assign(new Error('Interactive authentication must be finalized before browser state is exported.'), { statusCode: 409 });
+        return writeJson(response, 200, await controller.exportAuthorizedState(sessionId));
+      }
       if (request.method === 'POST' && action === 'verify-authentication') {
+        if (!controller.has(sessionId)) throw Object.assign(new Error('Interactive authentication is verified only during finalization.'), { statusCode: 409 });
         const body = await readJson(request, 64 * 1024);
         assertAllowedFields(body, ['authentication']);
         const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
         return writeJson(response, 200, await controller.verifyAuthentication(sessionId, authenticationPolicy));
+      }
+      if (request.method === 'POST' && action === 'finalize-authentication') {
+        if (controller.has(sessionId) || finalizingInteractiveSessions.has(sessionId)) {
+          throw Object.assign(new Error('This browser session is not available for interactive authentication finalization.'), { statusCode: 409 });
+        }
+        const body = await readJson(request, 64 * 1024);
+        assertAllowedFields(body, ['authentication', 'browserStatePolicy', 'launchUrl']);
+        const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+        if (!body.launchUrl) throw Object.assign(new Error('launchUrl is required.'), { statusCode: 400 });
+
+        const validationPolicy = {
+          required: false,
+          allowedHosts: Array.isArray(body.browserStatePolicy?.allowedHosts)
+            ? body.browserStatePolicy.allowedHosts
+            : [],
+        };
+        finalizingInteractiveSessions.set(sessionId, { launchUrl: body.launchUrl });
+        try {
+          const finalized = await interactiveAuth.finalize(sessionId, {
+            authentication: authenticationPolicy,
+            browserStatePolicy: validationPolicy,
+            launchUrl: body.launchUrl,
+          });
+          if (finalized?.authentication?.required !== true || finalized?.authentication?.verified !== true) {
+            throw Object.assign(new Error('Authenticated profile did not pass fresh-browser validation.'), {
+              statusCode: 409,
+              code: 'AUTHENTICATION_NOT_VERIFIED',
+            });
+          }
+          return writeJson(response, 200, finalized);
+        } finally {
+          finalizingInteractiveSessions.delete(sessionId);
+        }
       }
       if (request.method === 'POST' && action === 'navigate') {
         const body = await readJson(request);
@@ -182,17 +322,17 @@ const server = http.createServer(async (request, response) => {
 
     if (viewerRoute) {
       const { sessionId, action } = viewerRoute;
-      if (request.method === 'GET' && action === 'shell') { controller.assertSession(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
+      if (request.method === 'GET' && action === 'shell') { await sessionStatus(sessionId); const nonce = randomBytes(18).toString('base64'); return writeViewerHtml(response, buildViewerHtml({ sessionId, nonce }), nonce); }
       authorizeViewer(request, sessionId);
       await assertViewerToolAuthentication(sessionId);
-      if (request.method === 'GET' && action === 'status') return writeJson(response, 200, await controller.refreshMetadata(sessionId));
-      if (request.method === 'GET' && action === 'frame') { const frame = await controller.captureFrame(sessionId); response.writeHead(200, commonHeaders({ 'content-type': 'image/jpeg', 'content-length': String(frame.length), 'cross-origin-resource-policy': 'same-origin' })); response.end(frame); return; }
-      if (request.method === 'POST' && action === 'input') { const body = await readJson(request, 8 * 1024); return writeJson(response, 200, await controller.sendViewerInput(sessionId, body)); }
+      if (request.method === 'GET' && action === 'status') return writeJson(response, 200, await sessionStatus(sessionId));
+      if (request.method === 'GET' && action === 'frame') { const frame = await sessionFrame(sessionId); response.writeHead(200, commonHeaders({ 'content-type': 'image/jpeg', 'content-length': String(frame.length), 'cross-origin-resource-policy': 'same-origin' })); response.end(frame); return; }
+      if (request.method === 'POST' && action === 'input') { const body = await readJson(request, 8 * 1024); return writeJson(response, 200, await sessionInput(sessionId, body)); }
     }
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
     const statusCode = Number(error?.statusCode || 500);
-    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
+    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'INTERACTIVE_AUTH_LAUNCH_FAILED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'ACCOUNT_PROFILE_IN_USE', 'PROFILE_IDENTITY_INVALID', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
     const extraHeaders = statusCode === 429 && error?.retryAfterSeconds ? { 'retry-after': String(error.retryAfterSeconds) } : {};
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }, extraHeaders);
   }

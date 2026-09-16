@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { filterAuthorizedCookies, installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
+import { AccountBrowserProfileLease, clearStaleChromeArtifacts } from './account-browser-profile.mjs';
 
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
@@ -25,6 +26,17 @@ export function normalizeBrowserNavigationTimeoutMs(value) {
     throw new Error('BROWSER_NAVIGATION_TIMEOUT_MS must be an integer between 5000 and 120000.');
   }
   return timeout;
+}
+
+export function buildBrowserProcessEnvironment(userDataDir = '') {
+  const root = String(userDataDir || '').trim();
+  if (!root) return { ...process.env };
+  return {
+    ...process.env,
+    HOME: root,
+    XDG_CONFIG_HOME: join(root, '.config'),
+    XDG_CACHE_HOME: join(root, '.cache'),
+  };
 }
 
 export function validateNavigationUrl(value) {
@@ -69,6 +81,16 @@ export function validateViewerInput(input) {
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function classifyBrowserLaunchError(stderr) {
+  const value = String(stderr || '');
+  if (/singletonlock|user data directory|profile.*in use|process singleton/i.test(value)) return 'profile-lock';
+  if (/sandbox|zygote_host_impl_linux|namespace|operation not permitted/i.test(value)) return 'sandbox';
+  if (/missing x server|cannot open display|x11|display/i.test(value)) return 'display';
+  if (/crashpad/i.test(value)) return 'crashpad';
+  if (/permission denied|eacces/i.test(value)) return 'permissions';
+  return 'unknown';
+}
 function readProcessState(pid) { try { const status = readFileSync(`/proc/${pid}/status`, 'utf8'); return status.match(/^State:\s+([A-Z])/m)?.[1] || null; } catch { return null; } }
 function collectProcessTree(rootPid) {
   const parentMap = new Map(); let entries = [];
@@ -107,9 +129,28 @@ async function waitForDevToolsPort(userDataDir, processRef, timeoutMs = 10000) {
   while (Date.now() < deadline) { if (processRef.exitCode !== null || processRef.signalCode !== null) throw new Error(`Chromium exited before CDP became available (code ${processRef.exitCode}, signal ${processRef.signalCode || 'none'}).`); if (existsSync(portFile)) { const [portLine] = readFileSync(portFile, 'utf8').trim().split(/\r?\n/); const port = Number(portLine); if (Number.isInteger(port) && port > 0) return port; } await sleep(50); }
   throw new Error('Chromium did not expose a CDP port in time.');
 }
-async function findPageTarget(port, timeoutMs = 5000) {
-  const deadline = Date.now() + timeoutMs; let lastError = null;
-  while (Date.now() < deadline) { try { const response = await fetch(`http://127.0.0.1:${port}/json/list`); if (!response.ok) throw new Error(`HTTP ${response.status}`); const targets = await response.json(); const page = targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl); if (page) return page; } catch (error) { lastError = error; } await sleep(50); }
+async function findPageTarget(port, timeoutMs = 5000, preferredOrigin = '') {
+  const deadline = Date.now() + timeoutMs; let lastError = null; let fallback = null;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const targets = await response.json();
+      const pages = targets.filter((target) => target.type === 'page' && target.webSocketDebuggerUrl);
+      if (pages.length) {
+        if (!fallback) fallback = pages[0];
+        if (!preferredOrigin) return pages[0];
+        const preferred = pages.find((target) => {
+          try { return new URL(String(target.url || '')).origin === preferredOrigin; } catch { return false; }
+        });
+        if (preferred) return preferred;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(100);
+  }
+  if (fallback) return fallback;
   throw new Error(`No Chromium page target became available${lastError ? `: ${lastError.message}` : '.'}`);
 }
 function collectProcessGroup(groupId) {
@@ -122,6 +163,32 @@ function collectProcessGroup(groupId) {
 }
 function killProcessGroup(groupId, signal) { try { process.kill(-groupId, signal); return true; } catch { return false; } }
 async function waitForExit(processRef, timeoutMs) { if (processRef.exitCode !== null || processRef.signalCode !== null) return true; return new Promise((resolve) => { const timer = setTimeout(() => resolve(false), timeoutMs); processRef.once('exit', () => { clearTimeout(timer); resolve(true); }); }); }
+
+async function safeAuthenticationFailureContext(cdp, policyInput = {}) {
+  try {
+    const policy = policyInput && typeof policyInput === 'object' ? policyInput : {};
+    const result = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const selectors=${JSON.stringify(Array.isArray(policy.selectorsAny) ? policy.selectorsAny : [])};
+        const needles=${JSON.stringify(Array.isArray(policy.urlContainsAny) ? policy.urlContainsAny : [])};
+        const href=String(location.href||'');
+        return {
+          url: href.slice(0, 2048),
+          title: String(document.title||'').slice(0, 256),
+          urlMatched: !needles.length || needles.some((needle)=>href.includes(needle)),
+          selectorMatched: !selectors.length || selectors.some((selector)=>{try{return !!document.querySelector(selector)}catch{return false}}),
+        };
+      })()`,
+      returnByValue: true,
+    }, 3000);
+    const value = result?.result?.value;
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : { unavailable: true };
+  } catch {
+    return { unavailable: true };
+  }
+}
 
 export class BrowserSessionController {
   constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
@@ -175,29 +242,75 @@ export class BrowserSessionController {
     return session;
   }
   getStatus(sessionId) { return this.present(this.assertSession(sessionId)); }
+  has(sessionId) { this.pruneExited(); return this.sessions.has(String(sessionId || '')); }
   onlySessionId() { this.pruneExited(); if (this.sessions.size === 0) throw Object.assign(new Error('No browser session is active.'), { statusCode: 409 }); if (this.sessions.size !== 1) throw Object.assign(new Error('Legacy single-session operation is ambiguous while multiple browser sessions are active.'), { statusCode: 409 }); return this.sessions.keys().next().value; }
 
   async start(url = DEFAULT_TEST_URL, options = {}) {
     this.pruneExited();
     if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
-    if (!existsSync(this.executablePath)) throw new Error(`Chromium executable not found: ${this.executablePath}`);
+    const executablePath = String(options?.executablePath || this.executablePath);
+    if (!existsSync(executablePath)) throw new Error(`Chromium executable not found: ${executablePath}`);
     if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
-    const userDataDir = mkdtempSync(join(tmpdir(), 'toprated-browser-'));
-    const chromiumArgs = ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',`--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,'about:blank'];
-    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
+    let profileLease = null;
+    let suppliedUserDataDir = options?.userDataDir == null ? '' : String(options.userDataDir);
+    if (options?.persistentProfile) {
+      profileLease = new AccountBrowserProfileLease({
+        root: options.persistentProfile.root,
+        toolSlug: options.persistentProfile.toolSlug,
+        accountScope: options.persistentProfile.accountScope,
+      });
+      try { profileLease.acquire(); } catch (error) { this.startingCount -= 1; throw error; }
+      suppliedUserDataDir = profileLease.path;
+    }
+    if (suppliedUserDataDir) {
+      const authRoot = String(process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '').replace(/\/$/, '');
+      const allowedPrefix = authRoot ? authRoot + '/' : '';
+      const insideTmp = suppliedUserDataDir.startsWith(tmpdir() + '/');
+      const insideAuthRoot = allowedPrefix && suppliedUserDataDir.startsWith(allowedPrefix);
+      if ((!insideTmp && !insideAuthRoot) || !existsSync(suppliedUserDataDir)) {
+        throw new Error('Reusable browser profile directory is invalid.');
+      }
+    }
+    const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
+    const preserveUserDataDir = options?.preserveUserDataDir === true || profileLease !== null;
+    const restoreLastSession = options?.restoreLastSession === true;
+    // All processes that reopen a durable account profile must use the same
+    // Linux credential-store mode. The interactive authentication and
+    // validation paths already request `basic`; make it the secure,
+    // deterministic default for every persistent writer reopen as well.
+    const passwordStore = options?.passwordStore == null
+      ? (profileLease ? 'basic' : '')
+      : String(options.passwordStore);
+    if (passwordStore && passwordStore !== 'basic') {
+      throw new Error('Reusable browser profile password store is invalid.');
+    }
+    const chromiumArgs = [
+      '--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-crash-reporter',
+      '--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
+      ...(passwordStore === 'basic' ? ['--password-store=basic'] : []),
+      `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,
+      ...(restoreLastSession ? ['--restore-last-session'] : [profileLease ? safeUrl : 'about:blank']),
+    ];
+    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : executablePath;
     const launcherArgs = this.displayMode === 'virtual-display'
-      ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
+      ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, executablePath, ...chromiumArgs]
       : ['--headless=new', ...chromiumArgs];
-    const browserProcess = spawn(launcher, launcherArgs, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    const browserProcess = spawn(launcher, launcherArgs, {
+      env: buildBrowserProcessEnvironment(suppliedUserDataDir),
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: true,
+    });
     let stderr = ''; browserProcess.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
     let sessionId = null;
     let failureStage = 'cdp-port';
+    let authenticationFailureContext = null;
     try {
       const port = await waitForDevToolsPort(userDataDir, browserProcess);
       failureStage = 'cdp-target';
-      const target = await findPageTarget(port);
+      const preferredOrigin = restoreLastSession && /^https?:/.test(safeUrl) ? new URL(safeUrl).origin : '';
+      const target = await findPageTarget(port, restoreLastSession ? 10000 : 5000, preferredOrigin);
       failureStage = 'cdp-connect';
       const cdp = new CdpClient(target.webSocketDebuggerUrl);
       await cdp.connect(); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
@@ -207,6 +320,7 @@ export class BrowserSessionController {
         sessionId,
         process: browserProcess,
         userDataDir,
+        preserveUserDataDir,
         port,
         cdp,
         url: 'about:blank',
@@ -214,11 +328,34 @@ export class BrowserSessionController {
         authenticationRequired: options?.authentication?.required === true,
         authenticationVerified: false,
         authorizedStateAllowedHosts: [],
+        profileLease,
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
 
+      // A persistent profile is opened only after the human-controlled
+      // authentication browser has closed.  Before navigating the fresh
+      // validation/writer browser, let Chrome open its durable cookie store.
+      // This is an internal post-auth CDP operation; no automation is ever
+      // attached to the headed authentication browser itself.
+      if (profileLease) {
+        await cdp.send('Network.enable');
+        const profileReadyDeadline = Date.now() + 2500;
+        while (true) {
+          const cookies = await cdp.send('Network.getAllCookies', {}, 10000);
+          if (Array.isArray(cookies?.cookies) && cookies.cookies.length > 0) break;
+          if (Date.now() >= profileReadyDeadline) break;
+          await sleep(100);
+        }
+      }
+
       failureStage = 'state-install';
-      const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
+      // A durable account profile is itself the approved state source. It
+      // must never be paired with a copied cookie/storage payload, so retain
+      // all host constraints but do not require a separate raw-state object.
+      const browserStatePolicy = profileLease && options?.browserState == null
+        ? { ...(options?.browserStatePolicy || {}), required: false }
+        : (options?.browserStatePolicy || {});
+      const bootstrap = await installBrowserState(cdp, options?.browserState, browserStatePolicy, safeUrl);
       this.assertSession(sessionId).authorizedStateAllowedHosts = bootstrap.allowedHosts;
       try {
         failureStage = 'navigation';
@@ -227,20 +364,34 @@ export class BrowserSessionController {
         await removeBrowserStateBootstrap(cdp, bootstrap.scriptIdentifier);
       }
       failureStage = 'authentication';
-      const authentication = await verifyAuthentication(cdp, options?.authentication || {});
+      let authentication;
+      try {
+        authentication = await verifyAuthentication(cdp, options?.authentication || {});
+      } catch (error) {
+        authenticationFailureContext = await safeAuthenticationFailureContext(cdp, options?.authentication || {});
+        throw error;
+      }
       const session = this.assertSession(sessionId);
       session.authenticationRequired = authentication.required === true;
       session.authenticationVerified = authentication.verified === true;
       return this.getStatus(sessionId);
     } catch (error) {
       if (sessionId && this.sessions.has(sessionId)) { try { await this.stop(sessionId); } catch {} }
-      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); rmSync(userDataDir, { recursive: true, force: true }); }
+      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); if (!preserveUserDataDir) rmSync(userDataDir, { recursive: true, force: true }); profileLease?.release(); }
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
       const safeCode = error?.code || (failureStage === 'navigation' ? 'BROWSER_NAVIGATION_FAILED' : 'BROWSER_LAUNCH_FAILED');
       wrapped.code = safeCode;
-      console.error(JSON.stringify({ event: 'browser_start_failed', stage: failureStage, code: safeCode }));
+      console.error(JSON.stringify({
+        event: 'browser_start_failed',
+        stage: failureStage,
+        code: safeCode,
+        diagnostic: classifyBrowserLaunchError(stderr),
+        ...(failureStage === 'authentication' && authenticationFailureContext
+          ? { authenticationFailureContext }
+          : {}),
+      }));
       throw wrapped;
     } finally { this.startingCount -= 1; }
   }
@@ -353,11 +504,19 @@ export class BrowserSessionController {
     let rootExited = await waitForExit(session.process, 5000); let groupPids = collectProcessGroup(rootPid);
     if (!rootExited || groupPids.length) { if (!killProcessGroup(rootPid, 'SIGKILL')) { try { session.process.kill('SIGKILL'); } catch {} } rootExited = await waitForExit(session.process, 2000); }
     await sleep(250); groupPids = collectProcessGroup(rootPid);
-    let orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
+    let observedPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
+    let orphanPids = observedPids.filter((pid) => readProcessState(pid) !== 'Z');
     if (orphanPids.length) { killProcessGroup(rootPid, 'SIGKILL'); for (const pid of orphanPids) { try { process.kill(pid, 'SIGKILL'); } catch {} } await sleep(250); }
     groupPids = collectProcessGroup(rootPid); orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
     const zombiePids = orphanPids.filter((pid) => readProcessState(pid) === 'Z');
-    rmSync(session.userDataDir, { recursive: true, force: true });
+    orphanPids = orphanPids.filter((pid) => readProcessState(pid) !== 'Z');
+    if (session.preserveUserDataDir !== true) rmSync(session.userDataDir, { recursive: true, force: true });
+    // A zombie has already stopped and holds no profile files. Keep it in
+    // diagnostics, but do not extend the account-profile lease waiting for
+    // the container init process to reap it.
+    if (session.preserveUserDataDir === true && rootExited && orphanPids.length === 0) clearStaleChromeArtifacts(session.userDataDir);
+    if (rootExited && orphanPids.length === 0) session.profileLease?.release();
+    else session.profileLease?.abandon();
     return { rootExited, orphanPids, zombiePids };
   }
   async stop(sessionId) { const id = String(sessionId || ''); const session = this.sessions.get(id); if (!session) return { active: false, phase: RUNTIME_PHASE, sessionId: id || null, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } }; this.sessions.delete(id); const pid = session.process.pid; const cleanup = await this.cleanupSession(session); return { active: false, phase: RUNTIME_PHASE, sessionId: id, pid, cleanup }; }

@@ -1,0 +1,527 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { VIEWPORT_HEIGHT, VIEWPORT_WIDTH, validateNavigationUrl, validateViewerInput } from './browser-session.mjs';
+import { AccountBrowserProfileLease, clearStaleChromeArtifacts } from './account-browser-profile.mjs';
+
+const DISPLAY_MIN = 90;
+const DISPLAY_MAX = 190;
+
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function commandBuffer(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { maxBuffer: 12 * 1024 * 1024, ...options, encoding: null }, (error, stdout, stderr) => {
+      if (error) {
+        const detail = Buffer.isBuffer(stderr) ? stderr.toString('utf8').trim() : String(stderr || '').trim();
+        reject(new Error(detail ? `${command} failed: ${detail.slice(-500)}` : `${command} failed.`));
+        return;
+      }
+      resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout || ''));
+    });
+  });
+}
+
+function processAlive(processRef) {
+  return Boolean(processRef && processRef.exitCode === null && processRef.signalCode === null);
+}
+
+function processGroupAlive(processRef) {
+  if (!processRef || !Number.isInteger(Number(processRef.pid)) || Number(processRef.pid) < 1) return false;
+  try {
+    process.kill(-processRef.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessGroupExit(processRef, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processGroupAlive(processRef)) return true;
+    await sleep(50);
+  }
+  return !processGroupAlive(processRef);
+}
+
+function classifyChromeLaunchError(stderr) {
+  const value = String(stderr || '');
+  if (/sandbox|zygote_host_impl_linux|namespace|operation not permitted/i.test(value)) return 'sandbox';
+  if (/missing x server|cannot open display|x11|display/i.test(value)) return 'display';
+  if (/singletonlock|user data directory|profile/i.test(value)) return 'profile';
+  if (/crashpad/i.test(value)) return 'crashpad';
+  return 'unknown';
+}
+
+function readChromeVersion(executable) {
+  try {
+    return String(execFileSync(executable, ['--version'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 3000,
+    }) || '').trim().slice(0, 160);
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function stopProcessGroup(processRef, graceMs = 2500) {
+  if (!processRef || !processGroupAlive(processRef)) return true;
+  try { process.kill(-processRef.pid, 'SIGTERM'); } catch {}
+  const exited = await waitForProcessGroupExit(processRef, graceMs);
+  if (exited) return true;
+  try { process.kill(-processRef.pid, 'SIGKILL'); } catch {}
+  return waitForProcessGroupExit(processRef, 500);
+}
+
+async function closeChromeGracefully(session, graceMs = 5000) {
+  const ids = chromeWindowIds(session.display, session.chrome?.pid);
+  if (ids.length) {
+    const windowId = ids[ids.length - 1];
+    try {
+      // The headed administrator browser runs in bare Xvfb, which has no
+      // window manager to reliably relay a WM_DELETE_WINDOW request. Focus
+      // the actual Chrome window and use its normal close shortcut instead;
+      // Chrome then owns the shutdown and can flush its profile databases.
+      await commandBuffer('/usr/bin/xdotool', ['windowfocus', '--sync', windowId], {
+        env: { ...process.env, DISPLAY: session.display },
+        timeout: 1000,
+      });
+    } catch {}
+    try {
+      await commandBuffer('/usr/bin/xdotool', ['key', '--clearmodifiers', 'alt+F4'], {
+        env: { ...process.env, DISPLAY: session.display },
+        timeout: 1000,
+      });
+    } catch {}
+    if (await waitForProcessGroupExit(session.chrome, Math.max(1000, graceMs - 2000))) return true;
+
+    // Retain the protocol close request as a compatibility fallback for a
+    // Chrome build that does not honour Alt+F4 in the virtual display.
+    try {
+      await commandBuffer('/usr/bin/xdotool', ['windowclose', windowId], {
+        env: { ...process.env, DISPLAY: session.display },
+        timeout: 1000,
+      });
+    } catch {}
+    if (await waitForProcessGroupExit(session.chrome, 1500)) return true;
+    if (!processGroupAlive(session.chrome)) return true;
+  }
+  return stopProcessGroup(session.chrome, Math.max(1000, graceMs));
+}
+
+function chromeWindowIds(display, pid = null) {
+  const search = (args) => {
+    try {
+      const output = execFileSync('/usr/bin/xdotool', ['search', '--onlyvisible', ...args], {
+        env: { ...process.env, DISPLAY: display },
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
+      });
+      return String(output || '').trim().split(/\s+/).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+
+  if (Number.isInteger(Number(pid)) && Number(pid) > 0) {
+    const byPid = search(['--pid', String(pid)]);
+    if (byPid.length) return byPid;
+  }
+  return search(['--class', '[Gg]oogle-chrome']);
+}
+
+function chromeWindowReady(display, pid = null) {
+  return chromeWindowIds(display, pid).length > 0;
+}
+
+function chromeWindowTitle(display, pid = null) {
+  const ids = chromeWindowIds(display, pid);
+  if (!ids.length) return '';
+  try {
+    const output = execFileSync('/usr/bin/xdotool', ['getwindowname', ids[ids.length - 1]], {
+      env: { ...process.env, DISPLAY: display },
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    });
+    return String(output || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function buildInteractiveChromeArgs({ userDataDir, url }) {
+  return [
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-mode',
+    '--password-store=basic',
+    `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,
+    `--user-data-dir=${userDataDir}`,
+    url,
+  ];
+}
+
+export function assertInteractiveChromeArgs(args) {
+  const joined = args.join(' ');
+  for (const forbidden of [
+    '--headless',
+    '--remote-debugging-port',
+    '--remote-debugging-address',
+    '--enable-automation',
+    '--disable-blink-features',
+    '--no-sandbox',
+  ]) {
+    if (joined.includes(forbidden)) {
+      throw new Error(`Interactive authentication Chrome must not use ${forbidden}.`);
+    }
+  }
+  return true;
+}
+
+function xdotoolKey(input) {
+  const key = String(input.key || '');
+  const code = String(input.code || '');
+  const direct = new Map([
+    ['Enter', 'Return'],
+    ['Tab', 'Tab'],
+    ['Backspace', 'BackSpace'],
+    ['Escape', 'Escape'],
+    ['Delete', 'Delete'],
+    ['ArrowUp', 'Up'],
+    ['ArrowDown', 'Down'],
+    ['ArrowLeft', 'Left'],
+    ['ArrowRight', 'Right'],
+    ['Home', 'Home'],
+    ['End', 'End'],
+    ['PageUp', 'Page_Up'],
+    ['PageDown', 'Page_Down'],
+    [' ', 'space'],
+  ]);
+  let result = direct.get(key) || direct.get(code) || '';
+  if (!result && /^Key[A-Z]$/.test(code)) result = code.slice(3).toLowerCase();
+  if (!result && /^Digit[0-9]$/.test(code)) result = code.slice(5);
+  if (!result && /^F(?:[1-9]|1[0-2])$/.test(key)) result = key;
+  if (!result) return '';
+
+  const modifiers = Number(input.modifiers || 0);
+  const prefix = [
+    modifiers & 2 ? 'ctrl' : '',
+    modifiers & 1 ? 'alt' : '',
+    modifiers & 4 ? 'super' : '',
+    modifiers & 8 ? 'shift' : '',
+  ].filter(Boolean);
+  return [...prefix, result].join('+');
+}
+
+export class InteractiveAuthBrowserManager {
+  constructor({
+    chromeExecutable = process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
+    xvfbExecutable = process.env.XVFB_EXECUTABLE || '/usr/bin/Xvfb',
+    profileRoot = process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/account-browser-profiles',
+    maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3),
+  } = {}) {
+    this.chromeExecutable = chromeExecutable;
+    this.xvfbExecutable = xvfbExecutable;
+    this.profileRoot = profileRoot;
+    this.maxSessions = maxSessions;
+    this.sessions = new Map();
+    this.startingCount = 0;
+  }
+
+  has(sessionId) { return this.sessions.has(String(sessionId || '')); }
+
+  listStatus() {
+    this.pruneExited();
+    return {
+      activeCount: this.sessions.size,
+      startingCount: this.startingCount,
+      sessions: [...this.sessions.values()].map((session) => this.present(session)),
+    };
+  }
+
+  present(session) {
+    return {
+      active: true,
+      sessionId: session.sessionId,
+      pid: session.chrome.pid,
+      url: session.url,
+      title: 'Interactive administrator authentication',
+      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      viewer: 'restricted',
+      displayMode: 'interactive-auth',
+      browser: 'google-chrome-stable',
+      browserVersion: session.chromeVersion || 'unknown',
+      automationAttached: false,
+      authentication: { required: false, verified: false },
+    };
+  }
+
+  assertSession(sessionId) {
+    const session = this.sessions.get(String(sessionId || ''));
+    if (!session) throw Object.assign(new Error('Browser session is closed.'), { statusCode: 410 });
+    if (!processAlive(session.chrome) || !processAlive(session.xvfb)) {
+      this.sessions.delete(session.sessionId);
+      void this.cleanup(session);
+      throw Object.assign(new Error('Browser session is closed.'), { statusCode: 410 });
+    }
+    return session;
+  }
+
+  status(sessionId) {
+    const session = this.assertSession(sessionId);
+    const result = this.present(session);
+    const title = chromeWindowTitle(session.display, session.chrome.pid);
+    if (title) result.title = title;
+    return result;
+  }
+
+  allocateDisplay() {
+    const used = new Set([...this.sessions.values()].map((session) => session.display));
+    for (let value = DISPLAY_MIN; value <= DISPLAY_MAX; value += 1) {
+      const display = `:${value}`;
+      if (!used.has(display) && !existsSync(`/tmp/.X11-unix/X${value}`)) return display;
+    }
+    throw Object.assign(new Error('No virtual display is available for interactive authentication.'), { statusCode: 429 });
+  }
+
+  async start(url, profile) {
+    this.pruneExited();
+    if (this.sessions.size + this.startingCount >= this.maxSessions) {
+      throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
+    }
+    if (!existsSync(this.chromeExecutable)) throw new Error(`Google Chrome executable not found: ${this.chromeExecutable}`);
+    if (!existsSync(this.xvfbExecutable)) throw new Error(`Xvfb executable not found: ${this.xvfbExecutable}`);
+    if (!existsSync('/usr/bin/xdotool')) throw new Error('xdotool is required for interactive authentication.');
+    if (!existsSync('/usr/bin/import')) throw new Error('ImageMagick import is required for interactive authentication.');
+
+    const safeUrl = validateNavigationUrl(url);
+    if (!safeUrl.startsWith('https://') && !safeUrl.startsWith('http://')) {
+      throw Object.assign(new Error('Interactive authentication requires an HTTP or HTTPS URL.'), { statusCode: 422 });
+    }
+
+    this.startingCount += 1;
+    const sessionId = randomUUID();
+    const display = this.allocateDisplay();
+    const chromeVersion = readChromeVersion(this.chromeExecutable);
+    const lease = new AccountBrowserProfileLease({
+      root: this.profileRoot,
+      toolSlug: profile?.toolSlug,
+      accountScope: profile?.accountScope,
+    });
+    try { lease.acquire(); } catch (error) { this.startingCount -= 1; throw error; }
+    const userDataDir = lease.path;
+    const xvfb = spawn(this.xvfbExecutable, [display, '-screen', '0', `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, '-nolisten', 'tcp', '-noreset'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: true,
+    });
+    let chrome = null;
+    let stderr = '';
+    let failureStage = 'xvfb-start';
+
+    try {
+      failureStage = 'xvfb-ready';
+      const socketPath = `/tmp/.X11-unix/X${display.slice(1)}`;
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && !existsSync(socketPath)) {
+        if (!processAlive(xvfb)) throw new Error('Xvfb exited before the display became ready.');
+        await sleep(50);
+      }
+      if (!existsSync(socketPath)) throw new Error('Xvfb display did not become ready.');
+
+      failureStage = 'chrome-start';
+      const args = buildInteractiveChromeArgs({ userDataDir, url: safeUrl });
+      assertInteractiveChromeArgs(args);
+      chrome = spawn(this.chromeExecutable, args, {
+        env: {
+          ...process.env,
+          DISPLAY: display,
+          HOME: userDataDir,
+          XDG_CONFIG_HOME: join(userDataDir, '.config'),
+          XDG_CACHE_HOME: join(userDataDir, '.cache'),
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+        detached: true,
+      });
+      chrome.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
+
+      failureStage = 'chrome-window';
+      const chromeDeadline = Date.now() + 15000;
+      while (Date.now() < chromeDeadline) {
+        if (!processAlive(chrome)) throw new Error('Google Chrome exited before its window became ready.');
+        if (chromeWindowReady(display, chrome.pid)) break;
+        await sleep(150);
+      }
+      if (!chromeWindowReady(display, chrome.pid)) throw new Error('Google Chrome window did not become ready.');
+
+      const session = { sessionId, display, userDataDir, url: safeUrl, chrome, xvfb, chromeVersion, lease, profile: { toolSlug: String(profile?.toolSlug || ''), accountScope: String(profile?.accountScope || '') } };
+      this.sessions.set(sessionId, session);
+      chrome.once('exit', () => {
+        if (!this.sessions.has(sessionId)) return;
+        this.sessions.delete(sessionId);
+        void this.cleanup(session);
+      });
+
+      console.log(JSON.stringify({
+        event: 'interactive_auth_started',
+        sessionId,
+        browser: 'google-chrome-stable',
+        browserVersion: chromeVersion,
+        automationAttached: false,
+        displayMode: 'xvfb-headed',
+      }));
+      return this.present(session);
+    } catch (error) {
+      if (chrome) await stopProcessGroup(chrome);
+      await stopProcessGroup(xvfb);
+      lease.release();
+      const detail = stderr.trim().slice(-800);
+      console.error(JSON.stringify({
+        event: 'interactive_auth_start_failed',
+        code: 'INTERACTIVE_AUTH_LAUNCH_FAILED',
+        stage: failureStage,
+        chromeExitCode: chrome?.exitCode ?? null,
+        chromeSignal: chrome?.signalCode ?? null,
+        xvfbExitCode: xvfb?.exitCode ?? null,
+        xvfbSignal: xvfb?.signalCode ?? null,
+        diagnostic: classifyChromeLaunchError(stderr),
+      }));
+      throw Object.assign(new Error(detail ? `${error.message} Chrome: ${detail}` : error.message), {
+        statusCode: error?.statusCode || 500,
+        code: 'INTERACTIVE_AUTH_LAUNCH_FAILED',
+      });
+    } finally {
+      this.startingCount -= 1;
+    }
+  }
+
+  async frame(sessionId) {
+    const session = this.assertSession(sessionId);
+    return commandBuffer('/usr/bin/import', ['-display', session.display, '-window', 'root', 'jpeg:-'], {
+      env: { ...process.env, DISPLAY: session.display },
+    });
+  }
+
+  async input(sessionId, rawInput) {
+    const session = this.assertSession(sessionId);
+    const input = validateViewerInput(rawInput);
+    const env = { ...process.env, DISPLAY: session.display };
+    const run = (args, timeout = 1500) => commandBuffer('/usr/bin/xdotool', args, { env, timeout });
+    const windowIds = chromeWindowIds(session.display, session.chrome.pid);
+    if (windowIds.length) {
+      try { await run(['windowfocus', windowIds[windowIds.length - 1]], 750); } catch {}
+    }
+
+    if (input.type === 'mouse') {
+      const x = String(Math.round(input.x));
+      const y = String(Math.round(input.y));
+      const button = input.button === 'right' ? '3' : input.button === 'middle' ? '2' : '1';
+      if (input.event === 'released') await run(['mousemove', x, y, 'click', button]);
+      else await run(['mousemove', x, y]);
+    } else if (input.type === 'scroll') {
+      const verticalClicks = Math.min(12, Math.max(1, Math.round(Math.abs(input.deltaY) / 120)));
+      if (Math.abs(input.deltaY) > 1) {
+        for (let index = 0; index < verticalClicks; index += 1) await run(['click', input.deltaY > 0 ? '5' : '4']);
+      }
+    } else if (input.type === 'text') {
+      await run(['type', '--clearmodifiers', '--delay', '0', '--', input.text]);
+    } else if (input.type === 'key') {
+      const key = xdotoolKey(input);
+      if (!key) throw Object.assign(new Error('Keyboard key is not supported by the interactive authentication viewer.'), { statusCode: 400 });
+      await run(['key', '--clearmodifiers', key]);
+    }
+
+    return { inputAccepted: true, accepted: true };
+  }
+
+  async prepareForValidation(sessionId) {
+    const session = this.assertSession(sessionId);
+    // Remove lifecycle ownership before Chrome exits so the process-exit
+    // watchdog does not delete the profile that is intentionally being handed
+    // to the post-auth validation browser.
+    this.sessions.delete(sessionId);
+    const chromeExited = await closeChromeGracefully(session, 5000);
+    if (!chromeExited) {
+      await this.cleanup(session);
+      throw new Error('Interactive authentication Chrome did not close cleanly.');
+    }
+    const xvfbExited = await stopProcessGroup(session.xvfb, 2500);
+    if (!xvfbExited) {
+      session.lease.release();
+      throw new Error('Interactive authentication display did not close cleanly.');
+    }
+
+    // Chrome has exited, but its profile database can still be completing the
+    // final close on a mounted volume. Keep the profile lease while this
+    // bounded settle window elapses; the next Chrome process must never race
+    // that final durable-state flush.
+    await sleep(750);
+
+    // Chrome profile lock/DevTools marker files are process-lifecycle artifacts,
+    // not authentication state. Remove them only after the human-controlled
+    // Chrome process and its display have fully stopped so the same profile can
+    // be reopened safely for post-auth validation.
+    clearStaleChromeArtifacts(session.userDataDir);
+    session.lease.release();
+
+    console.log(JSON.stringify({
+      event: 'interactive_auth_handoff_ready',
+      sessionId,
+      browser: 'google-chrome-stable',
+      browserVersion: session.chromeVersion || 'unknown',
+      automationAttached: false,
+      persistentProfile: true,
+    }));
+
+    return {
+      sessionId,
+      profile: session.profile,
+      browser: 'google-chrome-stable',
+      browserVersion: session.chromeVersion || 'unknown',
+      chromeClosed: true,
+      displayClosed: true,
+    };
+  }
+
+  async stop(sessionId) {
+    const session = this.sessions.get(String(sessionId || ''));
+    if (!session) {
+      return { active: false, sessionId: String(sessionId || ''), cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } };
+    }
+    this.sessions.delete(session.sessionId);
+    const clean = await this.cleanup(session);
+    return {
+      active: false,
+      sessionId: session.sessionId,
+      cleanup: {
+        rootExited: clean,
+        orphanPids: [],
+        zombiePids: [],
+      },
+    };
+  }
+
+  async cleanup(session) {
+    const chromeExited = await stopProcessGroup(session.chrome);
+    const xvfbExited = await stopProcessGroup(session.xvfb);
+    if (chromeExited) clearStaleChromeArtifacts(session.userDataDir);
+    if (chromeExited) session.lease.release();
+    else session.lease.abandon();
+    return chromeExited && xvfbExited;
+  }
+
+  async stopAll() {
+    const results = [];
+    for (const sessionId of [...this.sessions.keys()]) results.push(await this.stop(sessionId));
+    return results;
+  }
+
+  pruneExited() {
+    for (const [sessionId, session] of this.sessions.entries()) {
+      if (processAlive(session.chrome) && processAlive(session.xvfb)) continue;
+      this.sessions.delete(sessionId);
+      void this.cleanup(session);
+    }
+  }
+}

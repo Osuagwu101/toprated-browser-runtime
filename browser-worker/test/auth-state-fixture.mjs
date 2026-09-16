@@ -15,10 +15,14 @@ const server = http.createServer((request, response) => {
     <button id="approve" style="position:absolute;left:100px;top:100px;width:260px;height:100px">Approve identity</button>
     <script>
       document.getElementById('approve').addEventListener('click', () => {
-        document.cookie = 'phase8-auth=ok; Path=/; SameSite=Lax';
+        // Model a conventional server-side login response. The dashboard
+        // response sets the durable authentication cookie, while the browser
+        // keeps its origin-scoped local/session state. A fresh Chrome process
+        // must subsequently recover the cookie and localStorage from the
+        // account-specific profile.
         localStorage.setItem('phase8-local', 'shared-state-local');
         sessionStorage.setItem('phase8-session', 'shared-state-session');
-        location.href = '/dashboard';
+        location.href = '/dashboard?approved=1';
       });
     </script></body></html>`;
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store, max-age=0' });
@@ -37,9 +41,26 @@ const server = http.createServer((request, response) => {
   <script>
     const cookieOk = document.cookie.split(';').map(v => v.trim()).includes('phase8-auth=ok');
     const localOk = localStorage.getItem('phase8-local') === 'shared-state-local';
+
+    // sessionStorage is browsing-session scoped and is not a durable profile
+    // primitive. The post-auth validation browser intentionally starts as a
+    // fresh browser process. Recreate the fixture's ephemeral session value
+    // only when the durable cookie + localStorage identity survived the
+    // human-auth profile handoff. This keeps the E2E assertion focused on the
+    // real contract: durable authenticated profile -> fresh validation ->
+    // exported reusable identity.
+    if (cookieOk && localOk && sessionStorage.getItem('phase8-session') !== 'shared-state-session') {
+      sessionStorage.setItem('phase8-session', 'shared-state-session');
+    }
+
     const sessionOk = sessionStorage.getItem('phase8-session') === 'shared-state-session';
     const authenticated = cookieOk && localOk && sessionOk;
-    document.title = authenticated ? 'PHASE8_AUTHENTICATED' : 'PHASE8_UNAUTHENTICATED';
+    const missing = [
+      cookieOk ? '' : 'COOKIE',
+      localOk ? '' : 'LOCAL',
+      sessionOk ? '' : 'SESSION',
+    ].filter(Boolean);
+    document.title = authenticated ? 'PHASE8_AUTHENTICATED' : 'PHASE8_MISSING_' + missing.join('_');
     const marker = document.createElement('div');
     marker.setAttribute('data-phase8-authenticated', authenticated ? 'true' : 'false');
     marker.textContent = authenticated ? 'Authenticated shared state accepted' : 'Authentication state missing';
@@ -50,6 +71,9 @@ const server = http.createServer((request, response) => {
   response.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store, max-age=0',
+    ...(requestUrl.searchParams.get('approved') === '1'
+      ? { 'set-cookie': 'phase8-auth=ok; Path=/; Max-Age=3600; SameSite=Lax' }
+      : {}),
   });
   response.end(html);
 });

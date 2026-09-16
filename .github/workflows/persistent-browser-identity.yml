@@ -70,11 +70,18 @@ jobs:
       - name: Start administrator authentication fixture
         run: |
           docker compose exec -d browser-worker node /srv/browser-worker/test/auth-state-fixture.mjs
-          for i in $(seq 1 20); do
-            if docker compose exec -T browser-worker node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then exit 0; fi
-            sleep 1
+          docker compose exec -d interactive-auth-worker node /srv/browser-worker/test/auth-state-fixture.mjs
+          for service in browser-worker interactive-auth-worker; do
+            ready=0
+            for i in $(seq 1 20); do
+              if docker compose exec -T "$service" node -e "fetch('http://127.0.0.1:19091/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            test "$ready" = 1
           done
-          exit 1
 
       - name: Capture identities and launch without writer state
         run: python3 tests/persistent-browser-identity-e2e.py bootstrap
@@ -118,7 +125,7 @@ jobs:
 
       - name: Verify isolation cleanup and secret-free logs
         run: |
-          docker compose logs --no-color api browser-worker >/tmp/identity-runtime.log
+          docker compose logs --no-color api browser-worker interactive-auth-worker >/tmp/identity-runtime.log
           for marker in 'shared-state-local' 'shared-state-session' 'must-not-enter-writer-api'; do
             if grep -F "$marker" /tmp/identity-runtime.log; then exit 1; fi
           done
@@ -127,11 +134,32 @@ jobs:
           const profiles=fs.readdirSync('/tmp').filter((name)=>name.startsWith('toprated-browser-'));
           if (profiles.length) { console.error(profiles); process.exit(1); }
           NODE
+          docker compose exec -T interactive-auth-worker node - <<'NODE'
+          const fs=require('node:fs');
+          const root='/srv/account-browser-profiles';
+          const profiles=fs.existsSync(root)?fs.readdirSync(root):[];
+          if (profiles.length < 2) { console.error({profiles, reason:'durable account profiles missing'}); process.exit(1); }
+          for (const profile of profiles) {
+            if (!/^[a-f0-9]{64}$/.test(profile)) { console.error({profile, reason:'profile identifier leaked'}); process.exit(1); }
+            const path=root+'/'+profile;
+            for (const stale of ['.toprated-profile-lease','SingletonLock','SingletonSocket','SingletonCookie','DevToolsActivePort']) {
+              if (fs.existsSync(path+'/'+stale)) { console.error({profile, stale}); process.exit(1); }
+            }
+          }
+          console.log('durable_account_profiles='+profiles.length);
+          NODE
           docker compose exec -T api php -r '
             $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");
             $open=$db->query("select count(*) from browser_sessions where status in (\"starting\",\"active\",\"closing\")")->fetchColumn();
             if ((int)$open!==0) exit(1);
           '
+
+      - name: Dump non-sensitive browser diagnostics on failure
+        if: failure()
+        run: |
+          docker compose logs --no-color browser-worker interactive-auth-worker 2>&1 \
+            | grep -E 'interactive_auth_(start_failed|started|validated|validation_closed|validation_close_failed)|browser_start_failed|worker_started' \
+            | tail -n 120 || true
 
       - name: Tear down
         if: always()
