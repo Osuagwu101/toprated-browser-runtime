@@ -154,7 +154,20 @@ const server = http.createServer(async (request, response) => {
           });
         } finally {
           if (validationSessionId) {
-            try { await validationController.stop(validationSessionId); } catch {}
+            try {
+              const stopped = await validationController.stop(validationSessionId);
+              console.log(JSON.stringify({
+                event: 'interactive_auth_validation_closed',
+                sessionId,
+                cleanup: {
+                  rootExited: stopped?.cleanup?.rootExited === true,
+                  orphanCount: Array.isArray(stopped?.cleanup?.orphanPids) ? stopped.cleanup.orphanPids.length : -1,
+                  zombieCount: Array.isArray(stopped?.cleanup?.zombiePids) ? stopped.cleanup.zombiePids.length : -1,
+                },
+              }));
+            } catch {
+              console.error(JSON.stringify({ event: 'interactive_auth_validation_close_failed', sessionId }));
+            }
           }
         }
       }

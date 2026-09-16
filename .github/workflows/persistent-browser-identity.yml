@@ -158,7 +158,7 @@ jobs:
         if: failure()
         run: |
           docker compose logs --no-color browser-worker interactive-auth-worker 2>&1 \
-            | grep -E 'interactive_auth_(start_failed|started|validated)|browser_start_failed|worker_started' \
+            | grep -E 'interactive_auth_(start_failed|started|validated|validation_closed|validation_close_failed)|browser_start_failed|worker_started' \
             | tail -n 120 || true
 
       - name: Tear down
