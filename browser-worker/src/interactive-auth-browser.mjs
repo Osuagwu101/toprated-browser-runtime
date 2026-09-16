@@ -78,14 +78,34 @@ async function stopProcessGroup(processRef, graceMs = 2500) {
 async function closeChromeGracefully(session, graceMs = 5000) {
   const ids = chromeWindowIds(session.display, session.chrome?.pid);
   if (ids.length) {
+    const windowId = ids[ids.length - 1];
     try {
-      await commandBuffer('/usr/bin/xdotool', ['windowclose', ids[ids.length - 1]], {
+      // The headed administrator browser runs in bare Xvfb, which has no
+      // window manager to reliably relay a WM_DELETE_WINDOW request. Focus
+      // the actual Chrome window and use its normal close shortcut instead;
+      // Chrome then owns the shutdown and can flush its profile databases.
+      await commandBuffer('/usr/bin/xdotool', ['windowfocus', '--sync', windowId], {
         env: { ...process.env, DISPLAY: session.display },
         timeout: 1000,
       });
     } catch {}
-    const deadline = Date.now() + graceMs;
-    while (Date.now() < deadline && processGroupAlive(session.chrome)) await sleep(100);
+    try {
+      await commandBuffer('/usr/bin/xdotool', ['key', '--clearmodifiers', 'alt+F4'], {
+        env: { ...process.env, DISPLAY: session.display },
+        timeout: 1000,
+      });
+    } catch {}
+    if (await waitForProcessGroupExit(session.chrome, Math.max(1000, graceMs - 2000))) return true;
+
+    // Retain the protocol close request as a compatibility fallback for a
+    // Chrome build that does not honour Alt+F4 in the virtual display.
+    try {
+      await commandBuffer('/usr/bin/xdotool', ['windowclose', windowId], {
+        env: { ...process.env, DISPLAY: session.display },
+        timeout: 1000,
+      });
+    } catch {}
+    if (await waitForProcessGroupExit(session.chrome, 1500)) return true;
     if (!processGroupAlive(session.chrome)) return true;
   }
   return stopProcessGroup(session.chrome, Math.max(1000, graceMs));
