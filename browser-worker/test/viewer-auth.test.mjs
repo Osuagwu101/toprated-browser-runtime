@@ -16,6 +16,13 @@ test('issues and verifies a session-bound short-lived viewer token', () => {
   assert.equal(verifyViewerToken(token, { sessionId, secret, nowSeconds: 1010 }).sid, sessionId);
 });
 
+test('supports a one-hour admin viewer token without weakening session binding', () => {
+  const { token, payload } = createViewerToken({ sessionId, secret, ttlSeconds: 3600, nowSeconds: 1000, nonce: 'admin-fixed' });
+  assert.equal(payload.exp, 4600);
+  assert.equal(verifyViewerToken(token, { sessionId, secret, nowSeconds: 4599 }).sid, sessionId);
+  assert.throws(() => createViewerToken({ sessionId, secret, ttlSeconds: 3601, nowSeconds: 1000 }), /between 1 and 3600 seconds/);
+});
+
 test('rejects tampered, expired, and cross-session viewer tokens', () => {
   const { token } = createViewerToken({ sessionId, secret, ttlSeconds: 60, nowSeconds: 1000, nonce: 'fixed' });
   const tampered = token.slice(0, -1) + (token.endsWith('A') ? 'B' : 'A');
