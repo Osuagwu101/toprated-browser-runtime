@@ -10,6 +10,7 @@ on:
       - phase11-security-hardening
       - phase11-security-hardening-v2
       - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -57,6 +58,7 @@ jobs:
           set -euo pipefail
           node --test browser-worker/test/*.test.mjs
           test -f browser-worker/src/session-policy-store.mjs
+          test -f browser-worker/chrome-seccomp.json
           test -f tests/phase11-security-e2e.py
           test -f docs/audits/phase-11.md
           grep -F "viewerClientRateLimiter" browser-worker/src/server.mjs
@@ -73,6 +75,24 @@ jobs:
             echo 'Unsafe Docker or host-network exposure found.' >&2
             exit 1
           fi
+          if grep -R --line-number -E 'seccomp[=:][[:space:]]*unconfined' docker-compose.yml; then
+            echo 'Unconfined seccomp profile found.' >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          profile=json.load(open('browser-worker/chrome-seccomp.json'))
+          assert profile.get('defaultAction') == 'SCMP_ACT_ERRNO', profile.get('defaultAction')
+          allow=set()
+          for rule in profile.get('syscalls', []):
+              if rule.get('action') == 'SCMP_ACT_ALLOW':
+                  allow.update(rule.get('names', []))
+          namespace={'clone','clone3','setns','unshare'}
+          assert namespace <= allow, namespace - allow
+          forbidden={'bpf','mount','umount2','kexec_load','finit_module','init_module','delete_module','perf_event_open','reboot','swapon','swapoff'}
+          assert not (forbidden & allow), sorted(forbidden & allow)
+          print('interactive_chrome_seccomp=pass')
+          PY
 
       - name: Validate Compose isolation contract
         run: |
@@ -90,7 +110,16 @@ jobs:
               ports=service.get('ports',[])
               match=[p for p in ports if int(p.get('target',0))==target]
               assert len(match)==1 and match[0].get('host_ip')=='127.0.0.1', (name,ports)
+          auth=cfg['services']['interactive-auth-worker']
+          assert auth.get('network_mode') != 'host', auth
+          assert auth.get('privileged') is not True, auth
+          assert not auth.get('cap_add'), auth
+          assert all('/var/run/docker.sock' not in str(v) for v in auth.get('volumes',[])), auth
+          opts=[str(v) for v in auth.get('security_opt',[])]
+          assert len(opts)==1 and opts[0].startswith('seccomp=') and opts[0].endswith('browser-worker/chrome-seccomp.json'), opts
+          assert all('unconfined' not in v.lower() for v in opts), opts
           assert cfg['networks']['browser-runtime']['driver']=='bridge', cfg['networks']
+          assert cfg['networks']['interactive-auth-control']['driver']=='bridge', cfg['networks']
           print('compose_isolation=pass')
           PY
 
@@ -129,7 +158,7 @@ jobs:
           set -euo pipefail
           test "$(docker compose port api 8080)" = "127.0.0.1:18080"
           test "$(docker compose port browser-worker 8081)" = "127.0.0.1:18081"
-          docker inspect "$(docker compose ps -q api)" "$(docker compose ps -q browser-worker)" > /tmp/phase11-inspect.json
+          docker inspect "$(docker compose ps -q api)" "$(docker compose ps -q browser-worker)" "$(docker compose ps -q interactive-auth-worker)" > /tmp/phase11-inspect.json
           python3 - <<'PY'
           import json
           data=json.load(open('/tmp/phase11-inspect.json'))
@@ -138,6 +167,9 @@ jobs:
               assert container['HostConfig']['Privileged'] is False, container['Name']
               assert not container['HostConfig']['CapAdd'], container['Name']
               assert all(m['Destination']!='/var/run/docker.sock' for m in container.get('Mounts',[])), container['Name']
+          auth=[c for c in data if 'interactive-auth-worker' in c['Name']][0]
+          opts=[str(v) for v in auth['HostConfig'].get('SecurityOpt') or []]
+          assert any(v.startswith('seccomp=') and 'unconfined' not in v.lower() for v in opts), opts
           print('runtime_network_boundary=pass')
           PY
 

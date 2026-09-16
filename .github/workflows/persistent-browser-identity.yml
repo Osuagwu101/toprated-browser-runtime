@@ -154,12 +154,22 @@ jobs:
             if ((int)$open!==0) exit(1);
           '
 
-      - name: Dump non-sensitive browser diagnostics on failure
+      - name: Save non-sensitive browser diagnostics on failure
         if: failure()
         run: |
           docker compose logs --no-color browser-worker interactive-auth-worker 2>&1 \
-            | grep -E 'interactive_auth_(start_failed|started|validated|validation_closed|validation_close_failed)|browser_start_failed|worker_started' \
-            | tail -n 120 || true
+            | grep -E 'interactive_auth_(start_failed|started|handoff_ready|validated|validation_closed|validation_close_failed)|browser_start_failed|worker_started' \
+            | tail -n 120 > /tmp/identity-diagnostics.log || true
+          cat /tmp/identity-diagnostics.log
+
+      - name: Upload non-sensitive browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-safe-diagnostics
+          path: /tmp/identity-diagnostics.log
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Tear down
         if: always()

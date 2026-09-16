@@ -17,6 +17,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /srv/browser-worker
 COPY browser-worker/package.json ./package.json
+COPY browser-worker/chrome-seccomp.json ./chrome-seccomp.json
 COPY browser-worker/src ./src
 COPY browser-worker/test ./test
 
