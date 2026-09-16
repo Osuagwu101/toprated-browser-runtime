@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const DEFAULT_VIEWER_TTL_SECONDS = 300;
-export const MAX_VIEWER_TTL_SECONDS = 900;
+export const MAX_VIEWER_TTL_SECONDS = 3600;
 
 function httpError(message, statusCode) {
   return Object.assign(new Error(message), { statusCode });
