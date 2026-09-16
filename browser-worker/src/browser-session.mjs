@@ -333,8 +333,13 @@ export class BrowserSessionController {
       // attached to the headed authentication browser itself.
       if (profileLease) {
         await cdp.send('Network.enable');
-        await cdp.send('Network.getAllCookies', {}, 10000);
-        await sleep(150);
+        const profileReadyDeadline = Date.now() + 2500;
+        while (true) {
+          const cookies = await cdp.send('Network.getAllCookies', {}, 10000);
+          if (Array.isArray(cookies?.cookies) && cookies.cookies.length > 0) break;
+          if (Date.now() >= profileReadyDeadline) break;
+          await sleep(100);
+        }
       }
 
       failureStage = 'state-install';
