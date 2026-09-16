@@ -276,7 +276,13 @@ export class BrowserSessionController {
     const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
     const preserveUserDataDir = options?.preserveUserDataDir === true || profileLease !== null;
     const restoreLastSession = options?.restoreLastSession === true;
-    const passwordStore = options?.passwordStore == null ? '' : String(options.passwordStore);
+    // All processes that reopen a durable account profile must use the same
+    // Linux credential-store mode. The interactive authentication and
+    // validation paths already request `basic`; make it the secure,
+    // deterministic default for every persistent writer reopen as well.
+    const passwordStore = options?.passwordStore == null
+      ? (profileLease ? 'basic' : '')
+      : String(options.passwordStore);
     if (passwordStore && passwordStore !== 'basic') {
       throw new Error('Reusable browser profile password store is invalid.');
     }
