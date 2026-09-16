@@ -7,7 +7,7 @@
       "action": "SCMP_ACT_ALLOW",
       "names": [
         "accept", "accept4", "access", "adjtimex", "alarm", "arch_prctl", "bind", "brk",
-        "cachestat", "capget", "capset", "chdir", "chmod", "chown", "clock_adjtime",
+        "cachestat", "capget", "capset", "chdir", "chmod", "chown", "chroot", "clock_adjtime",
         "clock_getres", "clock_gettime", "clock_nanosleep", "close", "close_range", "connect",
         "copy_file_range", "creat", "dup", "dup2", "dup3", "epoll_create", "epoll_create1",
         "epoll_ctl", "epoll_pwait", "epoll_pwait2", "epoll_wait", "eventfd", "eventfd2",
