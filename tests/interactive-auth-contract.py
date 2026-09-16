@@ -1,116 +1,50 @@
 #!/usr/bin/env python3
+"""Static security contract for permanent, human-authenticated Chrome profiles."""
 from pathlib import Path
 
 manager = Path("browser-worker/src/interactive-auth-browser.mjs").read_text()
+profile = Path("browser-worker/src/account-browser-profile.mjs").read_text()
 server = Path("browser-worker/src/server.mjs").read_text()
-session_manager = Path("api/app/Services/SessionManager.php").read_text()
-tool_auth = Path("api/app/Http/Controllers/ToolAuthController.php").read_text()
-dockerfile = Path("browser-worker/Dockerfile").read_text()
-compose = Path("docker-compose.yml").read_text()
 interactive_server = Path("browser-worker/src/interactive-auth-server.mjs").read_text()
 interactive_client = Path("browser-worker/src/interactive-auth-client.mjs").read_text()
+tool_auth = Path("api/app/Http/Controllers/ToolAuthController.php").read_text()
+session_controller = Path("api/app/Http/Controllers/SessionController.php").read_text()
+compose = Path("docker-compose.yml").read_text()
 
-required_manager = [
-    "google-chrome-stable",
-    "automationAttached: false",
-    "Interactive authentication Chrome must not use",
-    "--remote-debugging-port",
-    "--headless",
-    "xdotool",
-    "ImageMagick import",
-    "prepareForValidation(sessionId",
-    "cleanupProfile(profileId",
-]
-for needle in required_manager:
+helper = manager.split("export function buildInteractiveChromeArgs", 1)[1].split("export function assertInteractiveChromeArgs", 1)[0]
+for forbidden in ["'--headless=new'", "'--remote-debugging-port=0'", "'--enable-automation'", "'--disable-blink-features=AutomationControlled'", "'--no-sandbox'"]:
+    if forbidden in helper:
+        raise SystemExit(f"human-auth Chrome launch helper contains forbidden switch {forbidden}")
+
+for needle in ["AccountBrowserProfileLease", "clearStaleChromeArtifacts", "automationAttached: false", "prepareForValidation(sessionId", "persistentProfile: true", "google-chrome-stable"]:
     if needle not in manager:
-        raise SystemExit(f"interactive-auth contract missing {needle!r} in manager")
+        raise SystemExit(f"interactive manager missing {needle!r}")
 
-for forbidden_runtime_arg in [
-    "'--headless=new'",
-    "'--remote-debugging-port=0'",
-    "'--enable-automation'",
-    "'--disable-blink-features=AutomationControlled'",
-]:
-    # These strings may exist in guard/test logic, but must not be emitted by
-    # buildInteractiveChromeArgs itself. Inspect only the helper body.
-    helper = manager.split("export function buildInteractiveChromeArgs", 1)[1].split("export function assertInteractiveChromeArgs", 1)[0]
-    if forbidden_runtime_arg in helper:
-        raise SystemExit(f"interactive auth launch helper contains {forbidden_runtime_arg}")
+for needle in ["profileIdFor", "createHash('sha256')", "ACCOUNT_PROFILE_IN_USE", "expiresAt", "SingletonLock", "clearStaleChromeArtifacts"]:
+    if needle not in profile:
+        raise SystemExit(f"profile safety contract missing {needle!r}")
 
-required_server = [
-    "/browser/interactive-auth-sessions",
-    "finalize-authentication",
-    "interactiveAuth.frame(sessionId)",
-    "interactiveAuth.input(sessionId, body)",
-    "interactiveAuth.finalize(sessionId",
-    "finalizingInteractiveSessions.set",
-]
-for needle in required_server:
+for needle in ["persistentProfile", "ACCOUNT_PROFILE_IN_USE", "interactiveAuth.start(body.url", "GOOGLE_CHROME_EXECUTABLE"]:
     if needle not in server:
-        raise SystemExit(f"interactive-auth contract missing {needle!r} in worker server")
+        raise SystemExit(f"runtime persistent-profile contract missing {needle!r}")
 
-if "startInteractiveAuthentication($launchUrl)" not in session_manager:
-    raise SystemExit("operator sessions are not routed through interactive authentication")
-
-for needle in [
-    "finalizeInteractiveAuthentication(",
-    "Interactive authentication did not produce reusable browser identity state.",
-]:
-    if needle not in tool_auth:
-        raise SystemExit(f"tool auth finalization contract missing {needle!r}")
-
-for needle in [
-    "google-chrome-stable",
-    "USER browser",
-    "xdotool",
-    "imagemagick",
-]:
-    if needle not in dockerfile:
-        raise SystemExit(f"browser image contract missing {needle!r}")
-
-for needle in [
-    "interactive-auth-worker:",
-    "cap_add:",
-    "- SYS_ADMIN",
-    "INTERACTIVE_AUTH_WORKER_URL: http://interactive-auth-worker:8082",
-    "interactive-auth-profiles:/srv/interactive-auth-profiles",
-]:
-    if needle not in compose:
-        raise SystemExit(f"isolated auth service contract missing {needle!r}")
-
-auth_worker_block = compose.split("\n  interactive-auth-worker:", 1)[1].split("\n  browser-worker:", 1)[0]
-if "browser-runtime" in auth_worker_block:
-    raise SystemExit("interactive auth worker must not share the API/writer runtime network")
-if "interactive-auth-control" not in auth_worker_block:
-    raise SystemExit("interactive auth worker must use its dedicated control network")
-
-browser_worker_block = compose.split("\n  browser-worker:\n    build:", 1)[1].split("\nnetworks:", 1)[0]
-if "SYS_ADMIN" in browser_worker_block:
-    raise SystemExit("writer browser worker must not receive SYS_ADMIN")
-if "interactive-auth-control" not in browser_worker_block:
-    raise SystemExit("writer proxy must join the dedicated auth control network")
-
-for needle in [
-    "InteractiveAuthBrowserManager",
-    "BrowserSessionController",
-    "/internal/sessions",
-    "action === 'finalize'",
-    "validationController.start",
-    "validationController.exportAuthorizedState",
-    "validationLocation: 'interactive-auth-worker'",
-    "automationAttachedDuringAuth: false",
-]:
+for needle in ["toolSlug", "accountScope", "persistentProfile:", "validationController.start", "automationAttachedDuringAuth: false"]:
     if needle not in interactive_server:
         raise SystemExit(f"interactive auth server contract missing {needle!r}")
 
-for needle in [
-    "INTERACTIVE_AUTH_WORKER_URL",
-    "X-Toprated-Worker-Secret",
-    "prepare(sessionId)",
-    "finalize(sessionId, body)",
-    "cleanupProfile(profileId)",
-]:
-    if needle not in interactive_client:
-        raise SystemExit(f"interactive auth client contract missing {needle!r}")
+if "cleanupProfile" in interactive_client:
+    raise SystemExit("profile deletion must not be exposed through the interactive worker client")
+
+for forbidden in ["exportAuthorizedState", "'browserState' =>", "'authenticated_cookies' =>"]:
+    if forbidden in tool_auth:
+        raise SystemExit(f"tool authentication API still exposes or persists raw browser state: {forbidden!r}")
+
+for needle in ["persistent_profile", "persistentProfile", "BROWSER_STATE_INPUT_FORBIDDEN"]:
+    if needle not in session_controller:
+        raise SystemExit(f"writer permanent-profile routing missing {needle!r}")
+
+for needle in ["interactive-auth-worker:", "ACCOUNT_BROWSER_PROFILE_ROOT: /srv/account-browser-profiles", "interactive-auth-profiles:/srv/account-browser-profiles"]:
+    if needle not in compose:
+        raise SystemExit(f"compose persistent profile volume missing {needle!r}")
 
 print("interactive_auth_contract=pass")

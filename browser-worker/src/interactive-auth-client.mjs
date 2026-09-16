@@ -63,12 +63,11 @@ function workerError(status, payload) {
 export class InteractiveAuthWorkerClient {
   health() { return request('GET', '/health', undefined, { timeoutMs: 5000 }); }
   sessions() { return request('GET', '/internal/sessions', undefined, { timeoutMs: 5000 }); }
-  start(url) { return request('POST', '/internal/sessions', { url }, { timeoutMs: 30000 }); }
+  start(url, profile) { return request('POST', '/internal/sessions', { url, toolSlug: profile.toolSlug, accountScope: profile.accountScope }, { timeoutMs: 30000 }); }
   status(sessionId) { return request('GET', `/internal/sessions/${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 5000 }); }
   frame(sessionId) { return request('GET', `/internal/sessions/${encodeURIComponent(sessionId)}/frame`, undefined, { binary: true, timeoutMs: 10000 }); }
   input(sessionId, body) { return request('POST', `/internal/sessions/${encodeURIComponent(sessionId)}/input`, body, { timeoutMs: 10000 }); }
   prepare(sessionId) { return request('POST', `/internal/sessions/${encodeURIComponent(sessionId)}/prepare`, {}, { timeoutMs: 15000 }); }
   finalize(sessionId, body) { return request('POST', `/internal/sessions/${encodeURIComponent(sessionId)}/finalize`, body, { timeoutMs: 180000 }); }
   stop(sessionId) { return request('DELETE', `/internal/sessions/${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 10000 }); }
-  cleanupProfile(profileId) { return request('DELETE', `/internal/profiles/${encodeURIComponent(profileId)}`, undefined, { timeoutMs: 10000 }); }
 }

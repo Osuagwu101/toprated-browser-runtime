@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { VIEWPORT_HEIGHT, VIEWPORT_WIDTH, validateNavigationUrl, validateViewerInput } from './browser-session.mjs';
+import { AccountBrowserProfileLease, clearStaleChromeArtifacts } from './account-browser-profile.mjs';
 
 const DISPLAY_MIN = 90;
 const DISPLAY_MAX = 190;
@@ -185,7 +185,7 @@ export class InteractiveAuthBrowserManager {
   constructor({
     chromeExecutable = process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
     xvfbExecutable = process.env.XVFB_EXECUTABLE || '/usr/bin/Xvfb',
-    profileRoot = process.env.AUTH_BROWSER_PROFILE_ROOT || tmpdir(),
+    profileRoot = process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/account-browser-profiles',
     maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3),
   } = {}) {
     this.chromeExecutable = chromeExecutable;
@@ -252,7 +252,7 @@ export class InteractiveAuthBrowserManager {
     throw Object.assign(new Error('No virtual display is available for interactive authentication.'), { statusCode: 429 });
   }
 
-  async start(url) {
+  async start(url, profile) {
     this.pruneExited();
     if (this.sessions.size + this.startingCount >= this.maxSessions) {
       throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
@@ -271,8 +271,13 @@ export class InteractiveAuthBrowserManager {
     const sessionId = randomUUID();
     const display = this.allocateDisplay();
     const chromeVersion = readChromeVersion(this.chromeExecutable);
-    const userDataDir = this.profilePath(sessionId);
-    mkdirSync(userDataDir, { recursive: false, mode: 0o700 });
+    const lease = new AccountBrowserProfileLease({
+      root: this.profileRoot,
+      toolSlug: profile?.toolSlug,
+      accountScope: profile?.accountScope,
+    });
+    try { lease.acquire(); } catch (error) { this.startingCount -= 1; throw error; }
+    const userDataDir = lease.path;
     const xvfb = spawn(this.xvfbExecutable, [display, '-screen', '0', `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, '-nolisten', 'tcp', '-noreset'], {
       stdio: ['ignore', 'ignore', 'pipe'],
       detached: true,
@@ -316,7 +321,7 @@ export class InteractiveAuthBrowserManager {
       }
       if (!chromeWindowReady(display, chrome.pid)) throw new Error('Google Chrome window did not become ready.');
 
-      const session = { sessionId, display, userDataDir, url: safeUrl, chrome, xvfb, chromeVersion };
+      const session = { sessionId, display, userDataDir, url: safeUrl, chrome, xvfb, chromeVersion, lease, profile: { toolSlug: String(profile?.toolSlug || ''), accountScope: String(profile?.accountScope || '') } };
       this.sessions.set(sessionId, session);
       chrome.once('exit', () => {
         if (!this.sessions.has(sessionId)) return;
@@ -336,7 +341,7 @@ export class InteractiveAuthBrowserManager {
     } catch (error) {
       if (chrome) await stopProcessGroup(chrome);
       await stopProcessGroup(xvfb);
-      rmSync(userDataDir, { recursive: true, force: true });
+      lease.release();
       const detail = stderr.trim().slice(-800);
       console.error(JSON.stringify({
         event: 'interactive_auth_start_failed',
@@ -396,14 +401,6 @@ export class InteractiveAuthBrowserManager {
     return { inputAccepted: true, accepted: true };
   }
 
-  profilePath(profileId) {
-    const id = String(profileId || '');
-    if (!/^[0-9a-f-]{36}$/i.test(id)) {
-      throw Object.assign(new Error('Interactive authentication profile identifier is invalid.'), { statusCode: 400 });
-    }
-    return join(this.profileRoot, id);
-  }
-
   async prepareForValidation(sessionId) {
     const session = this.assertSession(sessionId);
     // Remove lifecycle ownership before Chrome exits so the process-exit
@@ -412,12 +409,12 @@ export class InteractiveAuthBrowserManager {
     this.sessions.delete(sessionId);
     const chromeExited = await closeChromeGracefully(session, 5000);
     if (!chromeExited) {
-      await this.cleanup(session, false);
+      await this.cleanup(session);
       throw new Error('Interactive authentication Chrome did not close cleanly.');
     }
     const xvfbExited = await stopProcessGroup(session.xvfb, 2500);
     if (!xvfbExited) {
-      rmSync(session.userDataDir, { recursive: true, force: true });
+      session.lease.release();
       throw new Error('Interactive authentication display did not close cleanly.');
     }
 
@@ -425,18 +422,8 @@ export class InteractiveAuthBrowserManager {
     // not authentication state. Remove them only after the human-controlled
     // Chrome process and its display have fully stopped so the same profile can
     // be reopened safely for post-auth validation.
-    for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort']) {
-      rmSync(join(session.userDataDir, name), { force: true });
-    }
-
-    const cookieDbCandidates = [
-      join(session.userDataDir, 'Default', 'Cookies'),
-      join(session.userDataDir, 'Default', 'Network', 'Cookies'),
-    ];
-    const cookieDb = cookieDbCandidates.find((candidate) => existsSync(candidate)) || '';
-    const cookieDbBytes = cookieDb ? (() => {
-      try { return statSync(cookieDb).size; } catch { return 0; }
-    })() : 0;
+    clearStaleChromeArtifacts(session.userDataDir);
+    session.lease.release();
 
     console.log(JSON.stringify({
       event: 'interactive_auth_handoff_ready',
@@ -444,24 +431,17 @@ export class InteractiveAuthBrowserManager {
       browser: 'google-chrome-stable',
       browserVersion: session.chromeVersion || 'unknown',
       automationAttached: false,
-      cookieDbPresent: Boolean(cookieDb),
-      cookieDbBytes,
+      persistentProfile: true,
     }));
 
     return {
       sessionId,
-      profileId: sessionId,
+      profile: session.profile,
       browser: 'google-chrome-stable',
       browserVersion: session.chromeVersion || 'unknown',
       chromeClosed: true,
       displayClosed: true,
     };
-  }
-
-  cleanupProfile(profileId) {
-    const path = this.profilePath(profileId);
-    rmSync(path, { recursive: true, force: true });
-    return { profileId: String(profileId), removed: !existsSync(path) };
   }
 
   async stop(sessionId) {
@@ -470,7 +450,7 @@ export class InteractiveAuthBrowserManager {
       return { active: false, sessionId: String(sessionId || ''), cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } };
     }
     this.sessions.delete(session.sessionId);
-    const clean = await this.cleanup(session, false);
+    const clean = await this.cleanup(session);
     return {
       active: false,
       sessionId: session.sessionId,
@@ -482,10 +462,12 @@ export class InteractiveAuthBrowserManager {
     };
   }
 
-  async cleanup(session, preserveProfile = false) {
+  async cleanup(session) {
     const chromeExited = await stopProcessGroup(session.chrome);
     const xvfbExited = await stopProcessGroup(session.xvfb);
-    if (!preserveProfile) rmSync(session.userDataDir, { recursive: true, force: true });
+    if (chromeExited) clearStaleChromeArtifacts(session.userDataDir);
+    if (chromeExited) session.lease.release();
+    else session.lease.abandon();
     return chromeExited && xvfbExited;
   }
 

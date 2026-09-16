@@ -109,12 +109,13 @@ services:
       PORT: 8082
       GOOGLE_CHROME_EXECUTABLE: ${GOOGLE_CHROME_EXECUTABLE:-/usr/bin/google-chrome-stable}
       XVFB_EXECUTABLE: ${XVFB_EXECUTABLE:-/usr/bin/Xvfb}
-      AUTH_BROWSER_PROFILE_ROOT: /srv/interactive-auth-profiles
+      ACCOUNT_BROWSER_PROFILE_ROOT: /srv/account-browser-profiles
+      ACCOUNT_PROFILE_LEASE_TTL_MS: ${ACCOUNT_PROFILE_LEASE_TTL_MS:-30000}
       WORKER_CONTROL_SECRET: ${WORKER_CONTROL_SECRET:?WORKER_CONTROL_SECRET must be set}
       MAX_BROWSER_SESSIONS: ${MAX_BROWSER_SESSIONS:-3}
       NODE_ENV: production
     volumes:
-      - interactive-auth-profiles:/srv/interactive-auth-profiles
+      - interactive-auth-profiles:/srv/account-browser-profiles
     networks:
       - interactive-auth-control
     restart: unless-stopped
@@ -135,7 +136,8 @@ services:
       CHROMIUM_EXECUTABLE: ${CHROMIUM_EXECUTABLE:-/usr/bin/chromium}
       GOOGLE_CHROME_EXECUTABLE: ${GOOGLE_CHROME_EXECUTABLE:-/usr/bin/google-chrome-stable}
       INTERACTIVE_AUTH_WORKER_URL: http://interactive-auth-worker:8082
-      AUTH_BROWSER_PROFILE_ROOT: /srv/interactive-auth-profiles
+      ACCOUNT_BROWSER_PROFILE_ROOT: /srv/account-browser-profiles
+      ACCOUNT_PROFILE_LEASE_TTL_MS: ${ACCOUNT_PROFILE_LEASE_TTL_MS:-30000}
       BROWSER_DISPLAY_MODE: ${BROWSER_DISPLAY_MODE:-headless}
       BROWSER_NAVIGATION_TIMEOUT_MS: ${BROWSER_NAVIGATION_TIMEOUT_MS:-45000}
       WORKER_CONTROL_SECRET: ${WORKER_CONTROL_SECRET:?WORKER_CONTROL_SECRET must be set}
@@ -148,7 +150,7 @@ services:
       VIEWER_RATE_LIMIT_PER_MINUTE: ${VIEWER_RATE_LIMIT_PER_MINUTE:-1200}
       NODE_ENV: production
     volumes:
-      - interactive-auth-profiles:/srv/interactive-auth-profiles
+      - interactive-auth-profiles:/srv/account-browser-profiles
     depends_on:
       interactive-auth-worker:
         condition: service_healthy

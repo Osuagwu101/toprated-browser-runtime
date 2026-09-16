@@ -60,6 +60,7 @@ final class SessionController
         }
 
         $browserState = null;
+        $persistentProfile = null;
         if (array_key_exists('browser_state', $body)) {
             if (config('browser.allow_legacy_browser_state_input', false) !== true) {
                 throw new RuntimeApiException(
@@ -77,10 +78,18 @@ final class SessionController
         if ($browserState === null
             && ($profile['browserState']['required'] ?? false) === true
             && config('browser.allow_legacy_browser_state_input', false) !== true) {
-            $browserState = $identities->load($toolSlug, $accountScope);
-            if ($browserState === null) {
+            $approvedIdentity = $identities->load($toolSlug, $accountScope);
+            if ($approvedIdentity === null) {
                 $toolAuthentication->requireReauthentication($toolSlug, 'BROWSER_IDENTITY_MISSING', $accountScope);
                 throw $toolAuthentication->reauthRequired();
+            }
+            if (($approvedIdentity['persistent_profile'] ?? false) === true) {
+                $persistentProfile = ['toolSlug' => $toolSlug, 'accountScope' => $accountScope];
+            } else {
+                // Existing encrypted identities remain usable during the
+                // transition; successful administrator re-authentication
+                // replaces them with the permanent-profile marker above.
+                $browserState = $approvedIdentity;
             }
         }
 
@@ -94,6 +103,8 @@ final class SessionController
             $profile['browserState'],
             $profile['authentication'],
             $accountScope,
+            false,
+            $persistentProfile,
         );
 
         return response()->json($result, $result['reused'] ? 200 : 201);

@@ -39,6 +39,7 @@ final class BrowserWorkerClient
         ?array $browserState = null,
         array $browserStatePolicy = [],
         array $authentication = [],
+        ?array $persistentProfile = null,
     ): array {
         $payload = [
             'url' => $launchUrl,
@@ -47,6 +48,9 @@ final class BrowserWorkerClient
         ];
         if ($browserState !== null) {
             $payload['browserState'] = $browserState;
+        }
+        if ($persistentProfile !== null) {
+            $payload['persistentProfile'] = $persistentProfile;
         }
 
         $authenticationTimeout = (int) ($authentication['timeoutSeconds'] ?? 0);
@@ -66,12 +70,12 @@ final class BrowserWorkerClient
         return $this->request('POST', '/browser/sessions', $payload, true, false, $requestTimeout);
     }
 
-    public function startInteractiveAuthentication(string $launchUrl): array
+    public function startInteractiveAuthentication(string $launchUrl, string $toolSlug, string $accountScope): array
     {
         return $this->request(
             'POST',
             '/browser/interactive-auth-sessions',
-            ['url' => $launchUrl],
+            ['url' => $launchUrl, 'toolSlug' => $toolSlug, 'accountScope' => $accountScope],
             true,
             false,
             self::MAX_START_REQUEST_TIMEOUT_SECONDS,

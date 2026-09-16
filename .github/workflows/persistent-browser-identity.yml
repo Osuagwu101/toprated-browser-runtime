@@ -136,9 +136,17 @@ jobs:
           NODE
           docker compose exec -T interactive-auth-worker node - <<'NODE'
           const fs=require('node:fs');
-          const root='/srv/interactive-auth-profiles';
+          const root='/srv/account-browser-profiles';
           const profiles=fs.existsSync(root)?fs.readdirSync(root):[];
-          if (profiles.length) { console.error(profiles); process.exit(1); }
+          if (profiles.length < 2) { console.error({profiles, reason:'durable account profiles missing'}); process.exit(1); }
+          for (const profile of profiles) {
+            if (!/^[a-f0-9]{64}$/.test(profile)) { console.error({profile, reason:'profile identifier leaked'}); process.exit(1); }
+            const path=root+'/'+profile;
+            for (const stale of ['.toprated-profile-lease','SingletonLock','SingletonSocket','SingletonCookie','DevToolsActivePort']) {
+              if (fs.existsSync(path+'/'+stale)) { console.error({profile, stale}); process.exit(1); }
+            }
+          }
+          console.log('durable_account_profiles='+profiles.length);
           NODE
           docker compose exec -T api php -r '
             $db=new PDO("sqlite:/srv/runtime-api/storage/data/database.sqlite");

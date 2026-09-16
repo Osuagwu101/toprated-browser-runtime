@@ -28,8 +28,9 @@ final class SessionManager
         array $authentication = [],
         string $accountScope = 'legacy',
         bool $interactiveAuthentication = false,
+        ?array $persistentProfile = null,
     ): array {
-        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope, $interactiveAuthentication): array {
+        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope, $interactiveAuthentication, $persistentProfile): array {
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -82,7 +83,7 @@ final class SessionManager
                 }
             }
 
-            if (($browserStatePolicy['required'] ?? false) === true && $browserState === null) {
+            if (($browserStatePolicy['required'] ?? false) === true && $browserState === null && $persistentProfile === null) {
                 throw new RuntimeApiException('BROWSER_STATE_REQUIRED', 422, 'This configured tool requires authorized shared browser state for a new session.');
             }
 
@@ -107,8 +108,8 @@ final class SessionManager
 
             try {
                 $workerStatus = $interactiveAuthentication
-                    ? $this->worker->startInteractiveAuthentication($launchUrl)
-                    : $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication);
+                    ? $this->worker->startInteractiveAuthentication($launchUrl, (string) ($persistentProfile['toolSlug'] ?? $toolSlug), (string) ($persistentProfile['accountScope'] ?? $accountScope))
+                    : $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication, $persistentProfile);
             } catch (RuntimeApiException $exception) {
                 $failureCode = in_array($exception->errorCode, ['BROWSER_STATE_INVALID', 'BROWSER_STATE_TOO_LARGE', 'TOOL_AUTH_NOT_VERIFIED'], true)
                     ? $exception->errorCode
@@ -184,6 +185,7 @@ final class SessionManager
             ['required' => false, 'urlContainsAny' => [], 'selectorsAny' => [], 'timeoutSeconds' => 10],
             $accountScope,
             true,
+            ['toolSlug' => $toolSlug, 'accountScope' => $accountScope],
         );
     }
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { filterAuthorizedCookies, installBrowserState, removeBrowserStateBootstrap, verifyAuthentication } from './browser-state.mjs';
+import { AccountBrowserProfileLease, clearStaleChromeArtifacts } from './account-browser-profile.mjs';
 
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
@@ -247,13 +248,24 @@ export class BrowserSessionController {
   async start(url = DEFAULT_TEST_URL, options = {}) {
     this.pruneExited();
     if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
-    if (!existsSync(this.executablePath)) throw new Error(`Chromium executable not found: ${this.executablePath}`);
+    const executablePath = String(options?.executablePath || this.executablePath);
+    if (!existsSync(executablePath)) throw new Error(`Chromium executable not found: ${executablePath}`);
     if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
-    const suppliedUserDataDir = options?.userDataDir == null ? '' : String(options.userDataDir);
+    let profileLease = null;
+    let suppliedUserDataDir = options?.userDataDir == null ? '' : String(options.userDataDir);
+    if (options?.persistentProfile) {
+      profileLease = new AccountBrowserProfileLease({
+        root: options.persistentProfile.root,
+        toolSlug: options.persistentProfile.toolSlug,
+        accountScope: options.persistentProfile.accountScope,
+      });
+      try { profileLease.acquire(); } catch (error) { this.startingCount -= 1; throw error; }
+      suppliedUserDataDir = profileLease.path;
+    }
     if (suppliedUserDataDir) {
-      const authRoot = String(process.env.AUTH_BROWSER_PROFILE_ROOT || '').replace(/\/$/, '');
+      const authRoot = String(process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '').replace(/\/$/, '');
       const allowedPrefix = authRoot ? authRoot + '/' : '';
       const insideTmp = suppliedUserDataDir.startsWith(tmpdir() + '/');
       const insideAuthRoot = allowedPrefix && suppliedUserDataDir.startsWith(allowedPrefix);
@@ -262,7 +274,7 @@ export class BrowserSessionController {
       }
     }
     const userDataDir = suppliedUserDataDir || mkdtempSync(join(tmpdir(), 'toprated-browser-'));
-    const preserveUserDataDir = options?.preserveUserDataDir === true;
+    const preserveUserDataDir = options?.preserveUserDataDir === true || profileLease !== null;
     const restoreLastSession = options?.restoreLastSession === true;
     const passwordStore = options?.passwordStore == null ? '' : String(options.passwordStore);
     if (passwordStore && passwordStore !== 'basic') {
@@ -275,9 +287,9 @@ export class BrowserSessionController {
       `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,
       ...(restoreLastSession ? ['--restore-last-session'] : ['about:blank']),
     ];
-    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : this.executablePath;
+    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : executablePath;
     const launcherArgs = this.displayMode === 'virtual-display'
-      ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, this.executablePath, ...chromiumArgs]
+      ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, executablePath, ...chromiumArgs]
       : ['--headless=new', ...chromiumArgs];
     const browserProcess = spawn(launcher, launcherArgs, {
       env: buildBrowserProcessEnvironment(suppliedUserDataDir),
@@ -310,6 +322,7 @@ export class BrowserSessionController {
         authenticationRequired: options?.authentication?.required === true,
         authenticationVerified: false,
         authorizedStateAllowedHosts: [],
+        profileLease,
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
 
@@ -336,7 +349,7 @@ export class BrowserSessionController {
       return this.getStatus(sessionId);
     } catch (error) {
       if (sessionId && this.sessions.has(sessionId)) { try { await this.stop(sessionId); } catch {} }
-      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); if (!preserveUserDataDir) rmSync(userDataDir, { recursive: true, force: true }); }
+      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); if (!preserveUserDataDir) rmSync(userDataDir, { recursive: true, force: true }); profileLease?.release(); }
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
@@ -468,6 +481,9 @@ export class BrowserSessionController {
     groupPids = collectProcessGroup(rootPid); orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
     const zombiePids = orphanPids.filter((pid) => readProcessState(pid) === 'Z');
     if (session.preserveUserDataDir !== true) rmSync(session.userDataDir, { recursive: true, force: true });
+    if (session.preserveUserDataDir === true && rootExited && orphanPids.length === 0) clearStaleChromeArtifacts(session.userDataDir);
+    if (rootExited && orphanPids.length === 0) session.profileLease?.release();
+    else session.profileLease?.abandon();
     return { rootExited, orphanPids, zombiePids };
   }
   async stop(sessionId) { const id = String(sessionId || ''); const session = this.sessions.get(id); if (!session) return { active: false, phase: RUNTIME_PHASE, sessionId: id || null, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } }; this.sessions.delete(id); const pid = session.process.pid; const cleanup = await this.cleanupSession(session); return { active: false, phase: RUNTIME_PHASE, sessionId: id, pid, cleanup }; }

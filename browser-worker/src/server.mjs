@@ -74,9 +74,18 @@ function authorizeWorkerControl(request) {
     throw Object.assign(new Error('Browser worker control authorization is required.'), { statusCode: 401 });
   }
 }
+function assertPersistentProfile(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Object.assign(new Error('Persistent profile is invalid.'), { statusCode: 422, code: 'PROFILE_IDENTITY_INVALID' });
+  const fields = Object.keys(value);
+  if (fields.length !== 2 || !fields.includes('toolSlug') || !fields.includes('accountScope')) throw Object.assign(new Error('Persistent profile is invalid.'), { statusCode: 422, code: 'PROFILE_IDENTITY_INVALID' });
+  const toolSlug = String(value.toolSlug || '').trim();
+  const accountScope = String(value.accountScope || '').trim();
+  if (!/^[A-Za-z0-9._-]{1,191}$/.test(toolSlug) || !(accountScope === 'legacy' || /^[0-9a-f-]{36}$/i.test(accountScope))) throw Object.assign(new Error('Persistent profile is invalid.'), { statusCode: 422, code: 'PROFILE_IDENTITY_INVALID' });
+  return { toolSlug, accountScope };
+}
 function assertSessionCreateBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('Browser session request must be a JSON object.'), { statusCode: 400 });
-  assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication'], 'Browser session request contains unsupported fields.');
+  assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication', 'persistentProfile'], 'Browser session request contains unsupported fields.');
 }
 async function refreshLiveToolAuthentication(sessionId) {
   if (!controller.has(sessionId)) return { required: false, verified: false };
@@ -200,11 +209,11 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'POST' && requestUrl.pathname === '/browser/interactive-auth-sessions') {
       const body = await readJson(request, 64 * 1024);
-      assertAllowedFields(body, ['url']);
-      if (!body.url) throw Object.assign(new Error('url is required.'), { statusCode: 400 });
+      assertAllowedFields(body, ['url', 'toolSlug', 'accountScope']);
+      if (!body.url || !body.toolSlug || !body.accountScope) throw Object.assign(new Error('url, toolSlug and accountScope are required.'), { statusCode: 400 });
       beginSessionCreate();
       try {
-        return writeJson(response, 201, await interactiveAuth.start(body.url));
+        return writeJson(response, 201, await interactiveAuth.start(body.url, assertPersistentProfile({ toolSlug: body.toolSlug, accountScope: body.accountScope })));
       } finally {
         endSessionCreate();
       }
@@ -213,12 +222,20 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request, sessionCreateMaxBytes);
       assertSessionCreateBody(body);
       const authenticationPolicy = normalizeAuthenticationPolicy(body.authentication || {});
+      const persistentProfile = body.persistentProfile ? assertPersistentProfile(body.persistentProfile) : null;
       beginSessionCreate();
       try {
         const created = await controller.start(body.url, {
           browserState: body.browserState,
           browserStatePolicy: body.browserStatePolicy,
           authentication: authenticationPolicy,
+          ...(persistentProfile ? {
+            persistentProfile: {
+              root: process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/account-browser-profiles',
+              ...persistentProfile,
+            },
+            executablePath: process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
+          } : {}),
         });
         sessionAuthenticationPolicies.set(created.sessionId, authenticationPolicy);
         writeJson(response, 201, created);
@@ -315,7 +332,7 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
     const statusCode = Number(error?.statusCode || 500);
-    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'INTERACTIVE_AUTH_LAUNCH_FAILED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
+    const safeCode = ['BROWSER_STATE_INVALID', 'AUTHENTICATION_POLICY_INVALID', 'AUTHENTICATION_NOT_VERIFIED', 'TOOL_REAUTH_REQUIRED', 'INTERACTIVE_AUTH_LAUNCH_FAILED', 'BROWSER_LAUNCH_FAILED', 'BROWSER_NAVIGATION_FAILED', 'BROWSER_NAVIGATION_TIMEOUT', 'ACCOUNT_PROFILE_IN_USE', 'PROFILE_IDENTITY_INVALID', 'RATE_LIMITED', 'REQUEST_QUERY_FORBIDDEN', 'REQUEST_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE', 'MALFORMED_JSON', 'MALFORMED_REQUEST', 'UNSUPPORTED_REQUEST_FIELDS'].includes(String(error?.code || '')) ? String(error.code) : null;
     const extraHeaders = statusCode === 429 && error?.retryAfterSeconds ? { 'retry-after': String(error.retryAfterSeconds) } : {};
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }, extraHeaders);
   }

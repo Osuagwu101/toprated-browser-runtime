@@ -47,11 +47,6 @@ function matchSession(pathname) {
   return match ? { sessionId: match[1], action: match[2] || 'status' } : null;
 }
 
-function matchProfile(pathname) {
-  const match = pathname.match(/^\/internal\/profiles\/([0-9a-f-]{36})$/i);
-  return match ? { profileId: match[1] } : null;
-}
-
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', 'http://interactive-auth-worker.local');
@@ -72,9 +67,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'POST' && url.pathname === '/internal/sessions') {
       const body = await readJson(request, 64 * 1024);
-      assertAllowedFields(body, ['url']);
-      if (!body.url) throw Object.assign(new Error('url is required.'), { statusCode: 400 });
-      return writeJson(response, 201, await manager.start(body.url));
+      assertAllowedFields(body, ['url', 'toolSlug', 'accountScope']);
+      if (!body.url || !body.toolSlug || !body.accountScope) throw Object.assign(new Error('url, toolSlug and accountScope are required.'), { statusCode: 400 });
+      return writeJson(response, 201, await manager.start(body.url, body));
     }
 
     const sessionRoute = matchSession(url.pathname);
@@ -111,18 +106,20 @@ const server = http.createServer(async (request, response) => {
           ? body.browserStatePolicy.allowedHosts
           : [];
         const prepared = await manager.prepareForValidation(sessionId);
-        const profileId = String(prepared?.profileId || '');
-        const profilePath = manager.profilePath(profileId);
         let validationSessionId = null;
         try {
           // Reopen the human-authenticated profile in a fresh validation
           // process, but do not restore Chrome's prior tab/session graph.
           // Validation should be deterministic: start cleanly, navigate to the
           // configured tool launch URL, verify the authenticated state there,
-          // and only then export reusable identity state.
+          // and then retain that same durable profile for writer sessions.
           const validated = await validationController.start(body.launchUrl, {
-            userDataDir: profilePath,
-            preserveUserDataDir: true,
+            persistentProfile: {
+              root: process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/account-browser-profiles',
+              toolSlug: prepared?.profile?.toolSlug,
+              accountScope: prepared?.profile?.accountScope,
+            },
+            executablePath: process.env.GOOGLE_CHROME_EXECUTABLE || '/usr/bin/google-chrome-stable',
             restoreLastSession: false,
             passwordStore: 'basic',
             browserStatePolicy: {
@@ -138,7 +135,6 @@ const server = http.createServer(async (request, response) => {
               code: 'AUTHENTICATION_NOT_VERIFIED',
             });
           }
-          const browserState = await validationController.exportAuthorizedState(validationSessionId);
           console.log(JSON.stringify({
             event: 'interactive_auth_validated',
             sessionId,
@@ -148,9 +144,9 @@ const server = http.createServer(async (request, response) => {
           }));
           return writeJson(response, 200, {
             authentication: validated.authentication,
-            browserState,
             profileValidation: {
               verified: true,
+              persistent: true,
               browser: 'google-chrome-stable',
               browserVersion: prepared?.browserVersion || 'unknown',
               validationLocation: 'interactive-auth-worker',
@@ -160,17 +156,11 @@ const server = http.createServer(async (request, response) => {
           if (validationSessionId) {
             try { await validationController.stop(validationSessionId); } catch {}
           }
-          try { manager.cleanupProfile(profileId); } catch {}
         }
       }
       if (request.method === 'DELETE' && action === 'status') {
         return writeJson(response, 200, await manager.stop(sessionId));
       }
-    }
-
-    const profileRoute = matchProfile(url.pathname);
-    if (profileRoute && request.method === 'DELETE') {
-      return writeJson(response, 200, manager.cleanupProfile(profileRoute.profileId));
     }
 
     return writeJson(response, 404, { status: 'not_found' });
