@@ -492,11 +492,16 @@ export class BrowserSessionController {
     let rootExited = await waitForExit(session.process, 5000); let groupPids = collectProcessGroup(rootPid);
     if (!rootExited || groupPids.length) { if (!killProcessGroup(rootPid, 'SIGKILL')) { try { session.process.kill('SIGKILL'); } catch {} } rootExited = await waitForExit(session.process, 2000); }
     await sleep(250); groupPids = collectProcessGroup(rootPid);
-    let orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
+    let observedPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
+    let orphanPids = observedPids.filter((pid) => readProcessState(pid) !== 'Z');
     if (orphanPids.length) { killProcessGroup(rootPid, 'SIGKILL'); for (const pid of orphanPids) { try { process.kill(pid, 'SIGKILL'); } catch {} } await sleep(250); }
     groupPids = collectProcessGroup(rootPid); orphanPids = [...new Set([...trackedPids.filter((pid) => existsSync(`/proc/${pid}`)), ...groupPids])];
     const zombiePids = orphanPids.filter((pid) => readProcessState(pid) === 'Z');
+    orphanPids = orphanPids.filter((pid) => readProcessState(pid) !== 'Z');
     if (session.preserveUserDataDir !== true) rmSync(session.userDataDir, { recursive: true, force: true });
+    // A zombie has already stopped and holds no profile files. Keep it in
+    // diagnostics, but do not extend the account-profile lease waiting for
+    // the container init process to reap it.
     if (session.preserveUserDataDir === true && rootExited && orphanPids.length === 0) clearStaleChromeArtifacts(session.userDataDir);
     if (rootExited && orphanPids.length === 0) session.profileLease?.release();
     else session.profileLease?.abandon();
