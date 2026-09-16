@@ -6,6 +6,8 @@ use App\Exceptions\RuntimeApiException;
 
 final class ViewerGrantService
 {
+    private const MAX_VIEWER_TTL_SECONDS = 3600;
+
     public function assertConfigured(): void
     {
         $secret = (string) config('browser.viewer_signing_secret', '');
@@ -14,7 +16,7 @@ final class ViewerGrantService
         }
 
         $ttl = (int) config('browser.viewer_token_ttl_seconds', 300);
-        if ($ttl < 1 || $ttl > 900) {
+        if ($ttl < 1 || $ttl > self::MAX_VIEWER_TTL_SECONDS) {
             throw new RuntimeApiException('VIEWER_TTL_INVALID', 503, 'Viewer token lifetime is invalid.');
         }
 
@@ -31,7 +33,7 @@ final class ViewerGrantService
 
         $secret = (string) config('browser.viewer_signing_secret');
         $ttl = $ttlSeconds ?? (int) config('browser.viewer_token_ttl_seconds', 300);
-        if ($ttl < 1 || $ttl > 900) {
+        if ($ttl < 1 || $ttl > self::MAX_VIEWER_TTL_SECONDS) {
             throw new RuntimeApiException('VIEWER_TTL_INVALID', 503, 'Viewer token lifetime is invalid.');
         }
         $baseUrl = rtrim((string) config('browser.viewer_public_base_url'), '/');

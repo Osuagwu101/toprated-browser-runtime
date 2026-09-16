@@ -11,7 +11,7 @@ return [
     'api_request_max_bytes' => (int) env('RUNTIME_API_MAX_REQUEST_BYTES', 327680),
     'viewer_signing_secret' => (string) env('VIEWER_SIGNING_SECRET', ''),
     'viewer_token_ttl_seconds' => (int) env('VIEWER_TOKEN_TTL_SECONDS', 300),
-    'admin_viewer_token_ttl_seconds' => (int) env('ADMIN_VIEWER_TOKEN_TTL_SECONDS', 900),
+    'admin_viewer_token_ttl_seconds' => (int) env('ADMIN_VIEWER_TOKEN_TTL_SECONDS', 3600),
     'viewer_public_base_url' => rtrim((string) env('VIEWER_PUBLIC_BASE_URL', 'http://127.0.0.1:18081'), '/'),
     'max_browser_sessions' => (int) env('MAX_BROWSER_SESSIONS', 3),
     'navigation_timeout_ms' => (int) env('BROWSER_NAVIGATION_TIMEOUT_MS', 45000),
