@@ -326,6 +326,17 @@ export class BrowserSessionController {
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
 
+      // A persistent profile is opened only after the human-controlled
+      // authentication browser has closed.  Before navigating the fresh
+      // validation/writer browser, let Chrome open its durable cookie store.
+      // This is an internal post-auth CDP operation; no automation is ever
+      // attached to the headed authentication browser itself.
+      if (profileLease) {
+        await cdp.send('Network.enable');
+        await cdp.send('Network.getAllCookies', {}, 10000);
+        await sleep(150);
+      }
+
       failureStage = 'state-install';
       const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
       this.assertSession(sessionId).authorizedStateAllowedHosts = bootstrap.allowedHosts;
