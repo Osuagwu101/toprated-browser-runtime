@@ -115,10 +115,15 @@ const server = http.createServer(async (request, response) => {
         const profilePath = manager.profilePath(profileId);
         let validationSessionId = null;
         try {
+          // Reopen the human-authenticated profile in a fresh validation
+          // process, but do not restore Chrome's prior tab/session graph.
+          // Validation should be deterministic: start cleanly, navigate to the
+          // configured tool launch URL, verify the authenticated state there,
+          // and only then export reusable identity state.
           const validated = await validationController.start(body.launchUrl, {
             userDataDir: profilePath,
             preserveUserDataDir: true,
-            restoreLastSession: true,
+            restoreLastSession: false,
             passwordStore: 'basic',
             browserStatePolicy: {
               required: false,
