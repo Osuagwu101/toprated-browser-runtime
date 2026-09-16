@@ -7,8 +7,11 @@ profile = Path("browser-worker/src/account-browser-profile.mjs").read_text()
 server = Path("browser-worker/src/server.mjs").read_text()
 interactive_server = Path("browser-worker/src/interactive-auth-server.mjs").read_text()
 interactive_client = Path("browser-worker/src/interactive-auth-client.mjs").read_text()
+viewer_auth = Path("browser-worker/src/viewer-auth.mjs").read_text()
 tool_auth = Path("api/app/Http/Controllers/ToolAuthController.php").read_text()
 session_controller = Path("api/app/Http/Controllers/SessionController.php").read_text()
+browser_config = Path("api/config/browser.php").read_text()
+env_example = Path(".env.example").read_text()
 compose = Path("docker-compose.yml").read_text()
 
 helper = manager.split("export function buildInteractiveChromeArgs", 1)[1].split("export function assertInteractiveChromeArgs", 1)[0]
@@ -42,6 +45,22 @@ for forbidden in ["exportAuthorizedState", "'browserState' =>", "'authenticated_
 for needle in ["persistent_profile", "persistentProfile", "BROWSER_STATE_INPUT_FORBIDDEN"]:
     if needle not in session_controller:
         raise SystemExit(f"writer permanent-profile routing missing {needle!r}")
+
+for needle in ["MAX_VIEWER_TTL_SECONDS = 3600", "viewer token TTL must be between 1 and ${MAX_VIEWER_TTL_SECONDS} seconds"]:
+    if needle not in viewer_auth:
+        raise SystemExit(f"viewer authorization lifetime contract missing {needle!r}")
+
+for needle in [
+    "'admin_viewer_token_ttl_seconds' => (int) env('ADMIN_VIEWER_TOKEN_TTL_SECONDS', 3600)",
+    "'session_idle_timeout_seconds' => (int) env('SESSION_IDLE_TIMEOUT_SECONDS', 3600)",
+    "'session_disconnect_grace_seconds' => (int) env('SESSION_DISCONNECT_GRACE_SECONDS', 3600)",
+]:
+    if needle not in browser_config:
+        raise SystemExit(f"interactive admin lifecycle config missing {needle!r}")
+
+for needle in ["ADMIN_VIEWER_TOKEN_TTL_SECONDS=3600", "SESSION_IDLE_TIMEOUT_SECONDS=3600", "SESSION_DISCONNECT_GRACE_SECONDS=3600"]:
+    if needle not in env_example:
+        raise SystemExit(f"documented interactive admin lifecycle default missing {needle!r}")
 
 for needle in ["interactive-auth-worker:", "ACCOUNT_BROWSER_PROFILE_ROOT: /srv/account-browser-profiles", "interactive-auth-profiles:/srv/account-browser-profiles"]:
     if needle not in compose:
