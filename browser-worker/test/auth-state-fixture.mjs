@@ -15,13 +15,14 @@ const server = http.createServer((request, response) => {
     <button id="approve" style="position:absolute;left:100px;top:100px;width:260px;height:100px">Approve identity</button>
     <script>
       document.getElementById('approve').addEventListener('click', () => {
-        // The human-auth -> validation handoff closes Chrome cleanly and
-        // starts a fresh process, so the fixture must use a durable login
-        // cookie rather than a browser-session-only cookie.
-        document.cookie = 'phase8-auth=ok; Path=/; Max-Age=3600; SameSite=Lax';
+        // Model a conventional server-side login response. The dashboard
+        // response sets the durable authentication cookie, while the browser
+        // keeps its origin-scoped local/session state. A fresh Chrome process
+        // must subsequently recover the cookie and localStorage from the
+        // account-specific profile.
         localStorage.setItem('phase8-local', 'shared-state-local');
         sessionStorage.setItem('phase8-session', 'shared-state-session');
-        location.href = '/dashboard';
+        location.href = '/dashboard?approved=1';
       });
     </script></body></html>`;
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store, max-age=0' });
@@ -70,6 +71,9 @@ const server = http.createServer((request, response) => {
   response.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store, max-age=0',
+    ...(requestUrl.searchParams.get('approved') === '1'
+      ? { 'set-cookie': 'phase8-auth=ok; Path=/; Max-Age=3600; SameSite=Lax' }
+      : {}),
   });
   response.end(html);
 });
