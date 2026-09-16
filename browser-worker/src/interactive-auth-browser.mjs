@@ -27,6 +27,25 @@ function processAlive(processRef) {
   return Boolean(processRef && processRef.exitCode === null && processRef.signalCode === null);
 }
 
+function processGroupAlive(processRef) {
+  if (!processRef || !Number.isInteger(Number(processRef.pid)) || Number(processRef.pid) < 1) return false;
+  try {
+    process.kill(-processRef.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessGroupExit(processRef, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processGroupAlive(processRef)) return true;
+    await sleep(50);
+  }
+  return !processGroupAlive(processRef);
+}
+
 function classifyChromeLaunchError(stderr) {
   const value = String(stderr || '');
   if (/sandbox|zygote_host_impl_linux|namespace|operation not permitted/i.test(value)) return 'sandbox';
@@ -48,17 +67,12 @@ function readChromeVersion(executable) {
 }
 
 async function stopProcessGroup(processRef, graceMs = 2500) {
-  if (!processRef || !processAlive(processRef)) return true;
+  if (!processRef || !processGroupAlive(processRef)) return true;
   try { process.kill(-processRef.pid, 'SIGTERM'); } catch {}
-  const exited = await new Promise((resolve) => {
-    if (!processAlive(processRef)) return resolve(true);
-    const timer = setTimeout(() => resolve(false), graceMs);
-    processRef.once('exit', () => { clearTimeout(timer); resolve(true); });
-  });
+  const exited = await waitForProcessGroupExit(processRef, graceMs);
   if (exited) return true;
   try { process.kill(-processRef.pid, 'SIGKILL'); } catch {}
-  await sleep(150);
-  return !processAlive(processRef);
+  return waitForProcessGroupExit(processRef, 500);
 }
 
 async function closeChromeGracefully(session, graceMs = 5000) {
@@ -71,8 +85,8 @@ async function closeChromeGracefully(session, graceMs = 5000) {
       });
     } catch {}
     const deadline = Date.now() + graceMs;
-    while (Date.now() < deadline && processAlive(session.chrome)) await sleep(100);
-    if (!processAlive(session.chrome)) return true;
+    while (Date.now() < deadline && processGroupAlive(session.chrome)) await sleep(100);
+    if (!processGroupAlive(session.chrome)) return true;
   }
   return stopProcessGroup(session.chrome, Math.max(1000, graceMs));
 }
