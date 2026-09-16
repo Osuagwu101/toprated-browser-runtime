@@ -103,8 +103,6 @@ services:
     command: ["node", "src/interactive-auth-server.mjs"]
     init: true
     shm_size: "1gb"
-    cap_add:
-      - SYS_ADMIN
     environment:
       PORT: 8082
       GOOGLE_CHROME_EXECUTABLE: ${GOOGLE_CHROME_EXECUTABLE:-/usr/bin/google-chrome-stable}
