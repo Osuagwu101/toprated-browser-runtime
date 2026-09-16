@@ -349,7 +349,13 @@ export class BrowserSessionController {
       }
 
       failureStage = 'state-install';
-      const bootstrap = await installBrowserState(cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
+      // A durable account profile is itself the approved state source. It
+      // must never be paired with a copied cookie/storage payload, so retain
+      // all host constraints but do not require a separate raw-state object.
+      const browserStatePolicy = profileLease && options?.browserState == null
+        ? { ...(options?.browserStatePolicy || {}), required: false }
+        : (options?.browserStatePolicy || {});
+      const bootstrap = await installBrowserState(cdp, options?.browserState, browserStatePolicy, safeUrl);
       this.assertSession(sessionId).authorizedStateAllowedHosts = bootstrap.allowedHosts;
       try {
         failureStage = 'navigation';
