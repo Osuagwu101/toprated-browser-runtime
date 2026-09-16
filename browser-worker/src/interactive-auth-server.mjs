@@ -107,6 +107,7 @@ const server = http.createServer(async (request, response) => {
           : [];
         const prepared = await manager.prepareForValidation(sessionId);
         let validationSessionId = null;
+        let finalized = null;
         try {
           // Reopen the human-authenticated profile in a fresh validation
           // process, but do not restore Chrome's prior tab/session graph.
@@ -142,7 +143,7 @@ const server = http.createServer(async (request, response) => {
             browserVersion: prepared?.browserVersion || 'unknown',
             validationLocation: 'interactive-auth-worker',
           }));
-          return writeJson(response, 200, {
+          finalized = {
             authentication: validated.authentication,
             profileValidation: {
               verified: true,
@@ -151,7 +152,7 @@ const server = http.createServer(async (request, response) => {
               browserVersion: prepared?.browserVersion || 'unknown',
               validationLocation: 'interactive-auth-worker',
             },
-          });
+          };
         } finally {
           if (validationSessionId) {
             try {
@@ -170,6 +171,11 @@ const server = http.createServer(async (request, response) => {
             }
           }
         }
+        // Do not acknowledge administrator approval until the temporary
+        // validation Chrome has fully shut down. Otherwise a writer can race
+        // its still-held account-profile lease immediately after this HTTP
+        // response is received.
+        return writeJson(response, 200, finalized);
       }
       if (request.method === 'DELETE' && action === 'status') {
         return writeJson(response, 200, await manager.stop(sessionId));
