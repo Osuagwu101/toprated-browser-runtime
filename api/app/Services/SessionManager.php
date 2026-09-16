@@ -636,15 +636,16 @@ final class SessionManager
     {
         $activityAt = $session->last_activity_at ?? $session->started_at ?? $session->created_at;
         $heartbeatAt = $session->last_heartbeat_at ?? $session->started_at ?? $session->created_at;
+        $isOperatorAuthentication = str_ends_with((string) $session->tool_slug, '-admin-bootstrap');
 
         $deadlines = [];
         if ($session->lease_expires_at !== null) {
             $deadlines['lease_expired'] = $session->lease_expires_at;
         }
-        if ($activityAt !== null) {
+        if (! $isOperatorAuthentication && $activityAt !== null) {
             $deadlines['idle_timeout'] = $activityAt->copy()->addSeconds($lifecycle['idleTimeoutSeconds']);
         }
-        if ($heartbeatAt !== null) {
+        if (! $isOperatorAuthentication && $heartbeatAt !== null) {
             $deadlines['disconnect_timeout'] = $heartbeatAt->copy()->addSeconds($lifecycle['disconnectGraceSeconds']);
         }
 

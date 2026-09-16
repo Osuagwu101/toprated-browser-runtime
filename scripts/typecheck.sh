@@ -17,6 +17,7 @@ printf 'python_compile_check=begin\n'
 python3 -m py_compile tests/*.py scripts/*.py
 python3 tests/account-scope-contract.py
 python3 tests/interactive-auth-contract.py
+python3 tests/admin-viewer-lifecycle-contract.py
 
 printf 'json_validation=begin\n'
 python3 -m json.tool api/composer.json >/dev/null
