@@ -55,7 +55,7 @@ function numeric(value, field) {
 }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
-export function validateViewerInput(input) {
+export function validateViewerInput(input, viewport = { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Viewer input must be a JSON object.'), { statusCode: 400 });
   const type = String(input.type || '');
   if (type === 'mouse') {
@@ -63,9 +63,9 @@ export function validateViewerInput(input) {
     if (!['moved', 'pressed', 'released'].includes(event)) throw Object.assign(new Error('Mouse event must be moved, pressed, or released.'), { statusCode: 400 });
     const button = String(input.button || (event === 'moved' ? 'none' : 'left'));
     if (!['none', 'left', 'middle', 'right'].includes(button)) throw Object.assign(new Error('Mouse button is invalid.'), { statusCode: 400 });
-    return { type, event, button, x: clamp(numeric(input.x, 'x'), 0, VIEWPORT_WIDTH - 1), y: clamp(numeric(input.y, 'y'), 0, VIEWPORT_HEIGHT - 1) };
+    return { type, event, button, x: clamp(numeric(input.x, 'x'), 0, Number(viewport.width || VIEWPORT_WIDTH) - 1), y: clamp(numeric(input.y, 'y'), 0, Number(viewport.height || VIEWPORT_HEIGHT) - 1) };
   }
-  if (type === 'scroll') return { type, x: clamp(numeric(input.x, 'x'), 0, VIEWPORT_WIDTH - 1), y: clamp(numeric(input.y, 'y'), 0, VIEWPORT_HEIGHT - 1), deltaX: clamp(numeric(input.deltaX ?? 0, 'deltaX'), -2000, 2000), deltaY: clamp(numeric(input.deltaY ?? 0, 'deltaY'), -2000, 2000) };
+  if (type === 'scroll') return { type, x: clamp(numeric(input.x, 'x'), 0, Number(viewport.width || VIEWPORT_WIDTH) - 1), y: clamp(numeric(input.y, 'y'), 0, Number(viewport.height || VIEWPORT_HEIGHT) - 1), deltaX: clamp(numeric(input.deltaX ?? 0, 'deltaX'), -2000, 2000), deltaY: clamp(numeric(input.deltaY ?? 0, 'deltaY'), -2000, 2000) };
   if (type === 'text') {
     const text = String(input.text ?? '');
     if (!text || text.length > 2000) throw Object.assign(new Error('Text input must contain between 1 and 2000 characters.'), { statusCode: 400 });
@@ -104,7 +104,7 @@ function collectProcessTree(rootPid) {
 }
 
 class CdpClient {
-  constructor(webSocketUrl) { this.webSocketUrl = webSocketUrl; this.socket = null; this.nextId = 1; this.pending = new Map(); this.eventWaiters = new Map(); }
+  constructor(webSocketUrl) { this.webSocketUrl = webSocketUrl; this.socket = null; this.nextId = 1; this.pending = new Map(); this.eventWaiters = new Map(); this.eventListeners = new Map(); }
   async connect(timeoutMs = 5000) {
     const socket = new WebSocket(this.webSocketUrl); this.socket = socket;
     await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('CDP WebSocket connection timed out.')), timeoutMs); socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true }); socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('CDP WebSocket connection failed.')); }, { once: true }); });
@@ -112,6 +112,7 @@ class CdpClient {
       let message; try { message = JSON.parse(String(event.data)); } catch { return; }
       if (message.id && this.pending.has(message.id)) { const { resolve, reject, timer } = this.pending.get(message.id); clearTimeout(timer); this.pending.delete(message.id); if (message.error) reject(new Error(message.error.message || 'CDP command failed.')); else resolve(message.result || {}); return; }
       if (message.method && this.eventWaiters.has(message.method)) { const waiters = this.eventWaiters.get(message.method); this.eventWaiters.delete(message.method); for (const waiter of waiters) { clearTimeout(waiter.timer); waiter.resolve(message.params || {}); } }
+      if (message.method && this.eventListeners.has(message.method)) { for (const listener of this.eventListeners.get(message.method)) { try { listener(message.params || {}); } catch {} } }
     });
     socket.addEventListener('close', () => { for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(new Error('CDP connection closed.')); } this.pending.clear(); });
   }
@@ -121,7 +122,8 @@ class CdpClient {
     return new Promise((resolve, reject) => { const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP command timed out: ${method}`)); }, timeoutMs); this.pending.set(id, { resolve, reject, timer }); this.socket.send(JSON.stringify({ id, method, params })); });
   }
   waitForEvent(method, timeoutMs = 5000) { return new Promise((resolve, reject) => { const timer = setTimeout(() => { const current = this.eventWaiters.get(method) || []; this.eventWaiters.set(method, current.filter((item) => item.resolve !== resolve)); reject(new Error(`CDP event timed out: ${method}`)); }, timeoutMs); const waiters = this.eventWaiters.get(method) || []; waiters.push({ resolve, reject, timer }); this.eventWaiters.set(method, waiters); }); }
-  close() { try { this.socket?.close(); } catch {} this.socket = null; }
+  on(method, listener) { const listeners = this.eventListeners.get(method) || new Set(); listeners.add(listener); this.eventListeners.set(method, listeners); return () => { listeners.delete(listener); if (!listeners.size) this.eventListeners.delete(method); }; }
+  close() { try { this.socket?.close(); } catch {} this.socket = null; this.eventListeners.clear(); }
 }
 
 async function waitForDevToolsPort(userDataDir, processRef, timeoutMs = 10000) {
@@ -222,7 +224,7 @@ export class BrowserSessionController {
       pid: session.process.pid,
       url: session.url,
       title: session.title,
-      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      viewport: session.viewport || { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       viewer: 'restricted',
       displayMode: this.displayMode,
       authentication: { required: session.authenticationRequired === true, verified: session.authenticationVerified === true },
@@ -328,6 +330,8 @@ export class BrowserSessionController {
         authenticationRequired: options?.authentication?.required === true,
         authenticationVerified: false,
         authorizedStateAllowedHosts: [],
+        viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+        viewerStreamStop: null,
         profileLease,
       });
       browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
@@ -431,13 +435,46 @@ export class BrowserSessionController {
   }
   async navigateOnly(url) { return this.navigate(this.onlySessionId(), url); }
   async captureFrame(sessionId) { const session = this.assertSession(sessionId); const result = await session.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, fromSurface: true, captureBeyondViewport: false }, 10000); if (!result.data) throw new Error('Chromium did not return a viewer frame.'); return Buffer.from(result.data, 'base64'); }
-  async sendViewerInput(sessionId, input) {
-    const session = this.assertSession(sessionId); const normalized = validateViewerInput(input);
+  async resizeViewerViewport(sessionId, width, height) {
+    const session = this.assertSession(sessionId);
+    const requestedWidth = Math.max(1, Math.round(numeric(width, 'width')));
+    const requestedHeight = Math.max(1, Math.round(numeric(height, 'height')));
+    const scale = Math.min(1, VIEWPORT_WIDTH / requestedWidth, VIEWPORT_HEIGHT / requestedHeight);
+    const nextWidth = clamp(Math.round(requestedWidth * scale), 480, VIEWPORT_WIDTH);
+    const nextHeight = clamp(Math.round(requestedHeight * scale), 320, VIEWPORT_HEIGHT);
+    await session.cdp.send('Emulation.setDeviceMetricsOverride', { width: nextWidth, height: nextHeight, deviceScaleFactor: 1, mobile: false });
+    session.viewport = { width: nextWidth, height: nextHeight };
+    return session.viewport;
+  }
+  async openViewerStream(sessionId, onFrame) {
+    const session = this.assertSession(sessionId);
+    if (typeof onFrame !== 'function') throw new Error('Viewer stream requires a frame callback.');
+    if (session.viewerStreamStop) await session.viewerStreamStop();
+    let active = true;
+    const off = session.cdp.on('Page.screencastFrame', (event) => {
+      if (!active) return;
+      const frameData = String(event?.data || '');
+      if (frameData) { try { onFrame(Buffer.from(frameData, 'base64'), event?.metadata || {}); } catch {} }
+      if (Number.isInteger(event?.sessionId)) void session.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+    });
+    await session.cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: VIEWPORT_WIDTH, maxHeight: VIEWPORT_HEIGHT, everyNthFrame: 1 }, 10000);
+    const stop = async () => {
+      if (!active) return; active = false; off();
+      try { await session.cdp.send('Page.stopScreencast', {}, 3000); } catch {}
+      if (session.viewerStreamStop === stop) session.viewerStreamStop = null;
+    };
+    session.viewerStreamStop = stop;
+    return stop;
+  }
+  async sendViewerInput(sessionId, input, { includeMetadata = true } = {}) {
+    const session = this.assertSession(sessionId); const normalized = validateViewerInput(input, session.viewport);
     if (normalized.type === 'mouse') { const type = normalized.event === 'moved' ? 'mouseMoved' : normalized.event === 'pressed' ? 'mousePressed' : 'mouseReleased'; await session.cdp.send('Input.dispatchMouseEvent', { type, x: normalized.x, y: normalized.y, button: normalized.button, clickCount: normalized.event === 'moved' ? 0 : 1 }); }
     else if (normalized.type === 'scroll') { await session.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: normalized.x, y: normalized.y, deltaX: normalized.deltaX, deltaY: normalized.deltaY }); await sleep(60); }
     else if (normalized.type === 'text') await session.cdp.send('Input.insertText', { text: normalized.text });
     else if (normalized.type === 'key') { const params = { key: normalized.key, code: normalized.code, modifiers: normalized.modifiers }; await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...params }); await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...params }); await sleep(30); }
-    return { inputAccepted: true, ...(await this.refreshMetadata(sessionId)) };
+    return includeMetadata
+      ? { inputAccepted: true, ...(await this.refreshMetadata(sessionId)) }
+      : { inputAccepted: true };
   }
 
   async verifyAuthentication(sessionId, policy) {
@@ -499,6 +536,7 @@ export class BrowserSessionController {
   async cleanupSession(session) {
     const rootPid = session.process.pid;
     const trackedPids = [...new Set([...collectProcessTree(rootPid), ...collectProcessGroup(rootPid)])];
+    if (session.viewerStreamStop) { try { await session.viewerStreamStop(); } catch {} }
     session.cdp.close();
     if (!killProcessGroup(rootPid, 'SIGTERM')) { try { session.process.kill('SIGTERM'); } catch {} }
     let rootExited = await waitForExit(session.process, 5000); let groupPids = collectProcessGroup(rootPid);
