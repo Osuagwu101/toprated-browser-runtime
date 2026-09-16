@@ -2,19 +2,23 @@
 
 Status: **IN TEST**  
 Blueprint: Master Blueprint v1.1  
-Verified PR baseline: `phase15-interactive-auth-browser` at `316ad7e6e1298330d6af9d074b74818248613c18`
+Verified PR baseline: `phase15-interactive-auth-browser` at `9a7747d010f06b0e852bfddb615dad7f8a788c7e`
 
 ## Evidence reviewed
 
 - PR #21 head and diff against `main` (`7dc696d7af34285efe020db75afc748a1ad4d539`).
 - Browser-worker interactive authentication, session, viewer, Compose, Laravel ToolAuthController, BrowserWorkerClient and SessionManager implementation.
-- GitHub Actions run `35049148304`: **failure** at `Capture identities and launch without writer state`; run `35049148326`: **success**.
+- GitHub Actions red-run history through `35056298366`, including durable-cookie loss, profile-handoff contention and an incorrectly required raw-state payload.
+- Final exact-head workflows: Persistent Browser Identity run `35056499005` and Phase 14 Deployment Readiness run `35056498973`: **success**.
 
 ## Findings
 
 1. **Blocker — profile handoff deleted the authenticated Chrome profile.** The human-auth worker closed a temporary UUID profile, reopened it only to export raw browser state, then removed it. This contradicts durable account Chrome profiles and caused the failing identity workflow.
 2. **Major — writer launches had no durable profile identity.** The signed server-to-server contract carried browser state but not the configured tool/account scope needed to reopen the matching profile.
 3. **Major — no cross-worker profile ownership lock existed.** Separate account profiles could run concurrently, but two processes could also contend for one profile after an interruption.
+4. **Blocker — interactive shutdown could force-kill Chrome before its cookie store was durably flushed.** The bare-Xvfb shutdown requested a window-manager-mediated close, which was not a reliable normal Chrome quit. The fresh validation browser then lacked the login cookie.
+5. **Blocker — validation success was sent before its Chrome cleanup completed.** The immediate writer launch raced the validation profile lease even after validation had succeeded.
+6. **Blocker — a durable profile writer was still evaluated against the legacy raw browser-state requirement.** It had no copied state by design, so its valid profile-backed launch was rejected.
 
 ## Fix set
 
@@ -24,6 +28,9 @@ Verified PR baseline: `phase15-interactive-auth-browser` at `316ad7e6e1298330d6a
 - Writer sessions receive only tool/account scope over the existing authenticated internal contract, reopen the matching saved profile with Google Chrome, and retain restricted-viewer and session authorization controls.
 - Added a bounded renewable profile lease. A second owner is rejected; expired stale leases remove only Chrome singleton artifacts, never the profile data.
 - Existing encrypted browser-state identities remain a transition fallback. A successful new administrator authentication stores only a durable-profile approval marker in the application database.
+- Replaced the unreliable Xvfb window-close request with a focused Chrome `Alt+F4` close, preserving the protocol close only as a fallback.
+- The finalize endpoint now waits for the validation Chrome cleanup before returning approval. Its safe diagnostics record only exit/orphan/zombie counts.
+- Every persistent-profile reopen now uses the same basic credential-store mode as authentication and validation; profile-backed launches do not require a copied raw browser-state payload.
 
 ## Verification
 
@@ -32,6 +39,8 @@ Verified PR baseline: `phase15-interactive-auth-browser` at `316ad7e6e1298330d6a
 - **PASS:** `python3 tests/interactive-auth-contract.py`.
 - **UNVERIFIED locally:** PHP syntax, Docker Compose validation/build and the full E2E workflow; this environment has neither `php` nor `docker` installed.
 - **UNVERIFIED:** live Contabo/Phrasly control case. It requires the legitimate administrator to complete Cloudflare and login manually; no bypassing mechanism is implemented.
+- **PASS:** final CI Persistent Browser Identity run `35056499005` — static/typecheck, container build, durable authenticated handoff, writer launch without copied state, encrypted marker storage, account isolation, restart recovery, expiry/reapproval, cleanup, and secret-free logs.
+- **PASS:** final CI Phase 14 Deployment Readiness run `35056498973`.
 
 ## Standing invariants
 
@@ -52,4 +61,4 @@ Verified PR baseline: `phase15-interactive-auth-browser` at `316ad7e6e1298330d6a
 
 ## Remaining gate
 
-PR #21 must pass its PHP, container, E2E, security and inherited CI gates on the final commit. The live controlled Phrasly experiment then requires a human administrator at the restricted viewer. If normal Chrome fails Cloudflare there, record the result as Contabo/network/browser-environment evidence; do not add evasion techniques.
+The CI gate is green on the final branch head. The remaining Phase 15 evidence is the live controlled Phrasly experiment, which requires a human administrator at the restricted viewer. If normal Chrome fails Cloudflare there, record the result as Contabo/network/browser-environment evidence; do not add evasion techniques.
