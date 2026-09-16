@@ -102,20 +102,38 @@ def approve_identity(tool, through_service=False, account_id=None):
         })
         assert code == 200 and accepted["inputAccepted"] is True, (code, accepted)
 
+    # Requiring several consecutive authenticated observations prevents the E2E
+    # harness from approving on the first paint after navigation. The fixture
+    # writes durable cookie/localStorage state immediately before navigating to
+    # /dashboard, and Chrome may still be committing that profile state when a
+    # very fast CI runner sees the first authenticated title. A real admin has
+    # natural dwell time here; the E2E test must model that handoff boundary.
     last_status = None
-    for _ in range(50):
+    authenticated_samples = 0
+    for _ in range(60):
         code, status = viewer("GET", viewer_url, token, "/status")
         last_status = {"code": code, "status": status}
-        if code == 200 and (
+        authenticated = code == 200 and (
             "/dashboard" in status.get("url", "")
             or "PHASE8_AUTHENTICATED" in status.get("title", "")
-        ):
-            break
+        )
+        if authenticated:
+            authenticated_samples += 1
+            if authenticated_samples >= 3:
+                break
+        else:
+            authenticated_samples = 0
         time.sleep(0.2)
     else:
         raise AssertionError(
-            f"administrator browser never reached the authenticated fixture: {last_status}"
+            f"administrator browser never reached a stable authenticated fixture: {last_status}"
         )
+
+    # Give the headed Chrome profile a short, bounded settle window before the
+    # approval endpoint cleanly closes it and reopens the same profile in the
+    # isolated validation process. This removes a CI-only persistence race
+    # without weakening the production validation requirement.
+    time.sleep(0.75)
 
     if through_service:
         code, approved = signed(
