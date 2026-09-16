@@ -418,6 +418,12 @@ export class InteractiveAuthBrowserManager {
       throw new Error('Interactive authentication display did not close cleanly.');
     }
 
+    // Chrome has exited, but its profile database can still be completing the
+    // final close on a mounted volume. Keep the profile lease while this
+    // bounded settle window elapses; the next Chrome process must never race
+    // that final durable-state flush.
+    await sleep(750);
+
     // Chrome profile lock/DevTools marker files are process-lifecycle artifacts,
     // not authentication state. Remove them only after the human-controlled
     // Chrome process and its display have fully stopped so the same profile can
