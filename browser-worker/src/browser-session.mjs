@@ -285,7 +285,7 @@ export class BrowserSessionController {
       '--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
       ...(passwordStore === 'basic' ? ['--password-store=basic'] : []),
       `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,
-      ...(restoreLastSession ? ['--restore-last-session'] : ['about:blank']),
+      ...(restoreLastSession ? ['--restore-last-session'] : [profileLease ? safeUrl : 'about:blank']),
     ];
     const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : executablePath;
     const launcherArgs = this.displayMode === 'virtual-display'
