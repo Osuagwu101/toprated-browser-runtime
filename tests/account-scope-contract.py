@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from pathlib import Path
 
 checks = {
@@ -9,7 +9,7 @@ checks = {
     ],
     "api/app/Http/Controllers/ToolAuthController.php": [
         "accountScope($request)",
-        "identities->save($tool, ['persistent_profile' => true], null, $accountScope)",
+        "identities->save($tool, $normalizedState, null, $accountScope)",
         "markVerified($tool, $accountScope)",
     ],
     "api/app/Services/PersistentBrowserIdentity.php": [
@@ -34,3 +34,4 @@ for filename, needles in checks.items():
             raise SystemExit(f"account-scope contract missing {needle!r} in {filename}")
 
 print("account_scope_contract=pass")
+
