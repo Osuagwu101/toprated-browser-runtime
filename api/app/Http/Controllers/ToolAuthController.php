@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\RuntimeApiException;
-use App\Services\AuthorizedBrowserState;
 use App\Services\BrowserWorkerClient;
 use App\Services\PersistentBrowserIdentity;
 use App\Services\SessionManager;
@@ -56,7 +55,6 @@ final class ToolAuthController
         ToolProfileRegistry $toolProfiles,
         ToolAuthenticationState $toolAuthentication,
         PersistentBrowserIdentity $identities,
-        AuthorizedBrowserState $authorizedBrowserState,
         BrowserWorkerClient $worker,
         SessionManager $sessions,
     ): JsonResponse {
@@ -84,20 +82,10 @@ final class ToolAuthController
             throw new RuntimeApiException('BROWSER_IDENTITY_INVALID', 422, 'Interactive authentication did not retain the account browser profile.');
         }
 
-        // The fresh validation browser is the only source of approved reusable
-        // state. Normalize it against the configured tool hosts, then encrypt it
-        // in the runtime-local identity vault. Raw cookies/storage never leave
-        // the Contabo runtime and are never returned to the website or writers.
-        $capturedState = $finalized['authorizedState'] ?? null;
-        $normalizedState = $authorizedBrowserState->normalize(
-            $capturedState,
-            $profile['browserState'],
-            $profile['launchUrl'],
-        );
-        if ($normalizedState === null) {
-            throw new RuntimeApiException('BROWSER_IDENTITY_INVALID', 422, 'Validated authentication did not produce reusable browser state.');
-        }
-        $identity = $identities->save($tool, $normalizedState, null, $accountScope);
+        // Fresh validation proves that the durable account profile itself is
+        // authenticated. Persist only a marker in the runtime identity vault;
+        // cookies/storage stay inside the account profile on the runtime host.
+        $identity = $identities->save($tool, ['persistent_profile' => true], null, $accountScope);
         $sessions->closeOperatorAuthentication($session, $tool, $accountScope);
         $auth = $toolAuthentication->markVerified($tool, $accountScope);
 

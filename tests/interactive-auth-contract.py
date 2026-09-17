@@ -28,9 +28,13 @@ for needle in ["persistentProfile", "ACCOUNT_PROFILE_IN_USE", "interactiveAuth.s
     if needle not in server:
         raise SystemExit(f"runtime persistent-profile contract missing {needle!r}")
 
-for needle in ["toolSlug", "accountScope", "persistentProfile:", "validationController.start", "automationAttachedDuringAuth: false", "exportAuthorizedState(validationSessionId)", "authorizedState"]:
+for needle in ["toolSlug", "accountScope", "persistentProfile:", "validationController.start", "automationAttachedDuringAuth: false"]:
     if needle not in interactive_server:
         raise SystemExit(f"interactive auth server contract missing {needle!r}")
+
+for forbidden in ["exportAuthorizedState(validationSessionId)", "authorizedState"]:
+    if forbidden in interactive_server:
+        raise SystemExit(f"interactive auth finalization must keep browser state inside the persistent profile: {forbidden!r}")
 
 if "cleanupProfile" in interactive_client:
     raise SystemExit("profile deletion must not be exposed through the interactive worker client")
@@ -39,9 +43,13 @@ for forbidden in ["exportAuthorizedState", "'browserState' =>", "'authenticated_
     if forbidden in tool_auth:
         raise SystemExit(f"tool authentication API still exposes raw browser state directly: {forbidden!r}")
 
-for needle in ["AuthorizedBrowserState $authorizedBrowserState", "$finalized['authorizedState']", "$authorizedBrowserState->normalize(", "$identities->save($tool, $normalizedState"]:
+for forbidden in ["AuthorizedBrowserState", "authorizedState", "$normalizedState"]:
+    if forbidden in tool_auth:
+        raise SystemExit(f"persistent-profile approval must not copy raw browser state: {forbidden!r}")
+
+for needle in ["['persistent_profile' => true]", "$identities->save($tool"]:
     if needle not in tool_auth:
-        raise SystemExit(f"validated encrypted identity capture missing {needle!r}")
+        raise SystemExit(f"persistent-profile marker save missing {needle!r}")
 
 for needle in ["persistent_profile", "persistentProfile", "BROWSER_STATE_INPUT_FORBIDDEN"]:
     if needle not in session_controller:

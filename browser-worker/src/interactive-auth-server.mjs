@@ -136,7 +136,6 @@ const server = http.createServer(async (request, response) => {
               code: 'AUTHENTICATION_NOT_VERIFIED',
             });
           }
-          const authorizedState = await validationController.exportAuthorizedState(validationSessionId);
           console.log(JSON.stringify({
             event: 'interactive_auth_validated',
             sessionId,
@@ -146,7 +145,6 @@ const server = http.createServer(async (request, response) => {
           }));
           finalized = {
             authentication: validated.authentication,
-            authorizedState,
             profileValidation: {
               verified: true,
               persistent: true,
