@@ -50,6 +50,23 @@ final class SessionManager
                 $existing = null;
             }
 
+            // A writer may reuse their own session above, but a different
+            // writer must never launch the same assigned SaaS account at the
+            // same time.  This prevents account state from being shared
+            // across isolated browser sessions even when the identity is
+            // restored from encrypted runtime-local state.
+            if ($accountScope !== 'legacy') {
+                $accountSessionExists = BrowserSession::query()
+                    ->where('tool_slug', $toolSlug)
+                    ->where('account_scope', $accountScope)
+                    ->where('writer_id', '!=', $writerId)
+                    ->whereIn('status', self::OPEN_STATUSES)
+                    ->exists();
+                if ($accountSessionExists) {
+                    throw new RuntimeApiException('ACCOUNT_SESSION_ACTIVE', 409, 'The assigned tool account already has an active browser session.');
+                }
+            }
+
             $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication, $accountScope);
 
             if ($existing !== null) {

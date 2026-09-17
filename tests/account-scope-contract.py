@@ -20,6 +20,9 @@ checks = {
         "'account_scope' => $accountScope",
         "account_scope_changed",
         "operatorWriterId($toolSlug, $accountScope)",
+        "ACCOUNT_SESSION_ACTIVE",
+        "$accountScope !== 'legacy'",
+        "->where('account_scope', $accountScope)",
     ],
     "api/database/migrations/2026_09_15_000006_scope_identity_by_account.php": [
         "$table->primary(['tool_slug', 'account_scope'])",
@@ -34,4 +37,3 @@ for filename, needles in checks.items():
             raise SystemExit(f"account-scope contract missing {needle!r} in {filename}")
 
 print("account_scope_contract=pass")
-
