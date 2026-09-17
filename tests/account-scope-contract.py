@@ -21,6 +21,7 @@ checks = {
         "account_scope_changed",
         "operatorWriterId($toolSlug, $accountScope)",
         "ACCOUNT_SESSION_ACTIVE",
+        "$accountScope !== 'legacy'",
         "->where('account_scope', $accountScope)",
     ],
     "api/database/migrations/2026_09_15_000006_scope_identity_by_account.php": [
