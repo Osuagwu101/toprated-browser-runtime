@@ -45,3 +45,9 @@ Signed OVH-to-runtime service calls, replay protection, server-side grants/capac
 ## Rollback
 
 The change is isolated to the viewer transport and browser-worker presentation/input path. The existing HTTP frame/status/input endpoints remain available during the V3 rollout, and the production commit before this work remains the deployment rollback point. Browser Use routing is not changed.
+
+## Real Phrasly acceptance finding
+
+Staging against a copied production Phrasly account proved that a durable Chrome profile marker alone is insufficient for this SaaS. The fresh post-admin validation browser reached `/dashboard`, but a second clean writer reopen of the same profile was redirected to `/login`. The reusable authentication therefore includes session-scoped browser state that is not guaranteed to survive another clean Chrome lifecycle.
+
+Viewer UX V3 now captures the already-verified validation browser's allowlisted cookies and Web Storage inside the Contabo runtime, normalizes it through `AuthorizedBrowserState`, and encrypts it with the existing AES-256-GCM `PersistentBrowserIdentity` vault. Raw state is never returned to the website or writers. Writer launches consume the encrypted runtime identity through the existing isolated state-injection path, which also avoids sharing one locked Chrome profile across concurrent writers.

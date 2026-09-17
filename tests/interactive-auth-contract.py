@@ -28,7 +28,7 @@ for needle in ["persistentProfile", "ACCOUNT_PROFILE_IN_USE", "interactiveAuth.s
     if needle not in server:
         raise SystemExit(f"runtime persistent-profile contract missing {needle!r}")
 
-for needle in ["toolSlug", "accountScope", "persistentProfile:", "validationController.start", "automationAttachedDuringAuth: false"]:
+for needle in ["toolSlug", "accountScope", "persistentProfile:", "validationController.start", "automationAttachedDuringAuth: false", "exportAuthorizedState(validationSessionId)", "authorizedState"]:
     if needle not in interactive_server:
         raise SystemExit(f"interactive auth server contract missing {needle!r}")
 
@@ -37,7 +37,11 @@ if "cleanupProfile" in interactive_client:
 
 for forbidden in ["exportAuthorizedState", "'browserState' =>", "'authenticated_cookies' =>"]:
     if forbidden in tool_auth:
-        raise SystemExit(f"tool authentication API still exposes or persists raw browser state: {forbidden!r}")
+        raise SystemExit(f"tool authentication API still exposes raw browser state directly: {forbidden!r}")
+
+for needle in ["AuthorizedBrowserState $authorizedBrowserState", "$finalized['authorizedState']", "$authorizedBrowserState->normalize(", "$identities->save($tool, $normalizedState"]:
+    if needle not in tool_auth:
+        raise SystemExit(f"validated encrypted identity capture missing {needle!r}")
 
 for needle in ["persistent_profile", "persistentProfile", "BROWSER_STATE_INPUT_FORBIDDEN"]:
     if needle not in session_controller:
