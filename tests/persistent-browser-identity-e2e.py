@@ -2,6 +2,7 @@
 """Persistent administrator-approved browser identity acceptance test."""
 
 import base64
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -216,13 +217,35 @@ def account_isolation():
     identity_b, _ = approve_identity(tool, through_service=True, account_id=account_b)
     assert identity_a["version"] == 1 and identity_b["version"] == 1, (identity_a, identity_b)
 
-    session_a = launch(tool, "scoped-writer-a", account_a)
-    code, duplicate = signed("POST", "/api/sessions", "scoped-writer-a-second", {
-        "writer_id": "scoped-writer-a-second", "tool_slug": tool, "account_id": account_a,
-    })
-    assert code == 409 and "profile" not in json.dumps(duplicate).lower(), (code, duplicate)
-    session_b = launch(tool, "scoped-writer-b", account_b)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        session_a, session_a_peer = list(pool.map(
+            lambda writer: launch(tool, writer, account_a),
+            ("scoped-writer-a", "scoped-writer-a-second"),
+        ))
+    assert session_a["sessionId"] != session_a_peer["sessionId"], (session_a, session_a_peer)
+
+    # One administrator-approved identity is cloned into separate temporary
+    # Chromium profiles. A second writer must get a private live browser, not
+    # an account-level conflict or a view into writer A's browser.
+    viewer_a, token_a, payload_a = decode_grant(session_a["viewerGrant"])
+    viewer_a_peer, token_a_peer, payload_a_peer = decode_grant(session_a_peer["viewerGrant"])
+    assert payload_a["sid"] != payload_a_peer["sid"], (payload_a, payload_a_peer)
+    code, status_a = viewer("GET", viewer_a, token_a, "/status")
+    assert code == 200 and status_a["active"] is True, (code, status_a)
+    code, status_a_peer = viewer("GET", viewer_a_peer, token_a_peer, "/status")
+    assert code == 200 and status_a_peer["active"] is True, (code, status_a_peer)
+    code, cross_viewer = viewer("GET", viewer_a_peer, token_a, "/status")
+    assert code == 403, (code, cross_viewer)
+
+    code, capacity = signed("GET", "/api/capacity", "scoped-capacity-probe")
+    assert code == 200 and capacity["openSessions"] == 2 and capacity["workerActiveSessions"] == 2, (code, capacity)
+
     close(session_a, "scoped-writer-a")
+    code, remaining = signed("GET", f"/api/sessions/{session_a_peer['sessionId']}", "scoped-writer-a-second")
+    assert code == 200 and remaining["status"] == "active", (code, remaining)
+    close(session_a_peer, "scoped-writer-a-second")
+
+    session_b = launch(tool, "scoped-writer-b", account_b)
     close(session_b, "scoped-writer-b")
 
     code, missing = signed("POST", "/api/sessions", "scoped-writer-missing", {
