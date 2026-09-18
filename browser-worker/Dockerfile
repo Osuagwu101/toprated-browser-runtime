@@ -4,7 +4,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 update \
     && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 install -y --no-install-recommends \
-      ca-certificates curl gnupg chromium xvfb xauth xdotool imagemagick \
+      ca-certificates curl gnupg chromium xvfb xauth xdotool imagemagick x11vnc novnc \
       fonts-liberation fonts-noto-core fonts-noto-color-emoji \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
@@ -37,6 +37,7 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin browser \
     && test -x /usr/bin/chromium \
     && test -x /usr/bin/Xvfb \
     && test -x /usr/bin/xdotool \
+    && test -x /usr/bin/x11vnc \
     && test -x /usr/bin/import
 
 USER browser
