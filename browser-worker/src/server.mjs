@@ -1,4 +1,7 @@
 import http from 'node:http';
+import net from 'node:net';
+import { readFile } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildHealthPayload } from './health.mjs';
 import { BrowserSessionController, RUNTIME_PHASE } from './browser-session.mjs';
@@ -9,6 +12,8 @@ import { FixedWindowRateLimiter, enforceRateLimit, normalizeRateLimit } from './
 import { assertAllowedFields, assertNoQuery, readJson } from './request-security.mjs';
 import { SessionPolicyStore } from './session-policy-store.mjs';
 import { buildViewerHtml } from './viewer-page.mjs';
+import { buildNativeHandoffHtml } from './native-page.mjs';
+import { NativeSessionCookieStore } from './native-cookie-store.mjs';
 import { buildViewerSecurityHeaders } from './viewer-security.mjs';
 import { ViewerReconnectTicketStore } from './viewer-reconnect.mjs';
 import { acceptWebSocketUpgrade, createWebSocketPeer, parseViewerProtocols } from './viewer-websocket.mjs';
@@ -36,6 +41,8 @@ const viewerClientRateLimiter = new FixedWindowRateLimiter({
 const viewerSessionRateLimiter = new FixedWindowRateLimiter({ limit: viewerRateLimit, maxBuckets: 4096 });
 const viewerReconnectTickets = new ViewerReconnectTicketStore({ maxEntries: Math.max(16, controller.maxSessions * 4) });
 const consumedViewerBootstraps = new Map();
+const nativeCookies = new NativeSessionCookieStore({ maxEntries: Math.max(32, controller.maxSessions * 4) });
+const noVncRoot = resolve(process.env.NOVNC_ROOT || '/usr/share/novnc');
 
 let sessionCreatesInFlight = 0;
 let sessionCreatesSettled = Promise.resolve();
@@ -68,8 +75,21 @@ function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-ag
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', ...buildViewerSecurityHeaders(nonce) })); response.end(html); }
 function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input|stream))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
+function matchNativeRoute(pathname) { const match = pathname.match(/^\/native\/([0-9a-f-]{36})(?:\/(authorize|stream|assets\/(.+)))?$/i); return match ? { sessionId: match[1], action: match[2] === 'authorize' ? 'authorize' : match[2] === 'stream' ? 'stream' : match[3] ? 'asset' : 'shell', asset: match[3] || '' } : null; }
 function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication|finalize-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
 function authorizeViewer(request, sessionId) { verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
+function readCookie(request, name) { return String(request.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || ''; }
+function nativeCookieName() { return 'trst_native'; }
+function nativeCookieHeader(sessionId, value) { return `${nativeCookieName()}=${value}; Path=/native/${encodeURIComponent(sessionId)}; HttpOnly; SameSite=Strict; ${process.env.NODE_ENV === 'production' ? 'Secure; ' : ''}Max-Age=3600`; }
+function assertNativeCookie(request, sessionId) { if (!nativeCookies.verify(sessionId, readCookie(request, nativeCookieName()))) throw Object.assign(new Error('Native handoff authorization is required.'), { statusCode: 401 }); }
+async function writeNativeAsset(response, asset) {
+  const candidate = resolve(noVncRoot, asset);
+  if (!candidate.startsWith(noVncRoot + sep)) throw Object.assign(new Error('Native asset was not found.'), { statusCode: 404 });
+  const body = await readFile(candidate).catch(() => null);
+  if (!body) throw Object.assign(new Error('Native asset was not found.'), { statusCode: 404 });
+  const contentType = asset.endsWith('.js') ? 'text/javascript; charset=utf-8' : asset.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/octet-stream';
+  response.writeHead(200, commonHeaders({ 'content-type': contentType, 'cross-origin-resource-policy': 'same-origin' })); response.end(body);
+}
 function consumeViewerBootstrap(token, sessionId) {
   const payload = verifyViewerToken(token, { sessionId, secret: viewerSecret });
   const now = Math.floor(Date.now() / 1000);
@@ -113,7 +133,7 @@ function assertPersistentProfile(value) {
 }
 function assertSessionCreateBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('Browser session request must be a JSON object.'), { statusCode: 400 });
-  assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication', 'persistentProfile'], 'Browser session request contains unsupported fields.');
+  assertAllowedFields(body, ['url', 'browserState', 'browserStatePolicy', 'authentication', 'persistentProfile', 'nativeTransport'], 'Browser session request contains unsupported fields.');
 }
 async function refreshLiveToolAuthentication(sessionId) {
   if (!controller.has(sessionId)) return { required: false, verified: false };
@@ -204,6 +224,7 @@ const server = http.createServer(async (request, response) => {
     pruneSessionAuthenticationPolicies();
     const clientAddress = String(request.socket.remoteAddress || 'unknown');
     const viewerRoute = matchViewerRoute(requestUrl.pathname);
+    const nativeRoute = matchNativeRoute(requestUrl.pathname);
     if (requestUrl.pathname.startsWith('/browser/')) {
       assertNoQuery(requestUrl);
       enforceRateLimit(workerControlRateLimiter, clientAddress);
@@ -213,6 +234,11 @@ const server = http.createServer(async (request, response) => {
       assertNoQuery(requestUrl);
       enforceRateLimit(viewerClientRateLimiter, clientAddress);
       enforceRateLimit(viewerSessionRateLimiter, `${clientAddress}:${viewerRoute.sessionId}`);
+    }
+    if (nativeRoute) {
+      if (requestUrl.search) throw Object.assign(new Error('Native handoff query parameters are not allowed.'), { statusCode: 400 });
+      enforceRateLimit(viewerClientRateLimiter, clientAddress);
+      enforceRateLimit(viewerSessionRateLimiter, `${clientAddress}:${nativeRoute.sessionId}`);
     }
 
     // Session-scoped lifecycle API used by Laravel. Sensitive browser state is accepted only on this private, authenticated creation path and is never logged or returned.
@@ -258,6 +284,7 @@ const server = http.createServer(async (request, response) => {
           browserState: body.browserState,
           browserStatePolicy: body.browserStatePolicy,
           authentication: authenticationPolicy,
+          nativeTransport: body.nativeTransport === true,
           ...(persistentProfile ? {
             persistentProfile: {
               root: process.env.ACCOUNT_BROWSER_PROFILE_ROOT || process.env.AUTH_BROWSER_PROFILE_ROOT || '/srv/account-browser-profiles',
@@ -358,6 +385,21 @@ const server = http.createServer(async (request, response) => {
       if (request.method === 'GET' && action === 'frame') { const frame = await sessionFrame(sessionId); response.writeHead(200, commonHeaders({ 'content-type': 'image/jpeg', 'content-length': String(frame.length), 'cross-origin-resource-policy': 'same-origin' })); response.end(frame); return; }
       if (request.method === 'POST' && action === 'input') { const body = await readJson(request, 8 * 1024); return writeJson(response, 200, await sessionInput(sessionId, body)); }
     }
+    if (nativeRoute) {
+      const { sessionId, action, asset } = nativeRoute;
+      if (request.method === 'GET' && action === 'shell') {
+        await sessionStatus(sessionId);
+        const nonce = randomBytes(18).toString('base64');
+        return writeViewerHtml(response, buildNativeHandoffHtml({ sessionId, nonce }), nonce);
+      }
+      if (request.method === 'GET' && action === 'asset') return writeNativeAsset(response, asset);
+      if (request.method === 'POST' && action === 'authorize') {
+        authorizeViewer(request, sessionId);
+        await assertViewerToolAuthentication(sessionId);
+        const cookie = nativeCookies.issue(sessionId);
+        response.writeHead(204, commonHeaders({ 'set-cookie': nativeCookieHeader(sessionId, cookie) })); response.end(); return;
+      }
+    }
     writeJson(response, 404, { status: 'not_found' });
   } catch (error) {
     const statusCode = Number(error?.statusCode || 500);
@@ -374,6 +416,26 @@ server.on('upgrade', async (request, socket) => {
   let heartbeat = null;
   try {
     const requestUrl = new URL(request.url || '/', 'http://browser-worker.local');
+    const nativeRoute = matchNativeRoute(requestUrl.pathname);
+    if (nativeRoute?.action === 'stream') {
+      if (requestUrl.search) throw Object.assign(new Error('Native handoff query parameters are not allowed.'), { statusCode: 400 });
+      const clientAddress = String(request.socket.remoteAddress || 'unknown');
+      enforceRateLimit(viewerClientRateLimiter, clientAddress);
+      enforceRateLimit(viewerSessionRateLimiter, `${clientAddress}:${nativeRoute.sessionId}`);
+      assertNativeCookie(request, nativeRoute.sessionId);
+      await sessionStatus(nativeRoute.sessionId);
+      await assertViewerToolAuthentication(nativeRoute.sessionId);
+      const vncPort = controller.nativeVncPort(nativeRoute.sessionId);
+      acceptWebSocketUpgrade(request, socket, '');
+      peer = createWebSocketPeer(socket, { maxMessageBytes: 2 * 1024 * 1024 });
+      const vnc = net.connect({ host: '127.0.0.1', port: vncPort });
+      vnc.on('data', (data) => { if (!peer.closed) peer.sendBinary(data); });
+      vnc.on('error', () => { if (!peer.closed) peer.close(1011, 'Native browser connection failed.'); });
+      vnc.on('close', () => { if (!peer.closed) peer.close(1001, 'Native browser connection closed.'); });
+      peer.on('message', (opcode, payload) => { if (opcode === 0x2 && !vnc.destroyed) vnc.write(payload); });
+      peer.on('close', () => { try { vnc.end(); } catch {} });
+      return;
+    }
     const route = matchViewerRoute(requestUrl.pathname);
     if (!route || route.action !== 'stream') throw Object.assign(new Error('Viewer WebSocket route was not found.'), { statusCode: 404 });
     assertNoQuery(requestUrl);
