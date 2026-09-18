@@ -23,6 +23,11 @@
         reverse_proxy browser-worker:8081
     }
 
+    @native path /native/*
+    handle @native {
+        reverse_proxy browser-worker:8081
+    }
+
     handle {
         respond "Not Found" 404
     }

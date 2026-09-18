@@ -26,6 +26,7 @@ jobs:
           set -euo pipefail
           bash -n scripts/phase14-bootstrap-ubuntu.sh
           python3 -m py_compile scripts/phase14-external-acceptance.py
+          python3 -m py_compile scripts/staging-viewer-v3-acceptance.py
           python3 tests/phase15-service-auth-handoff-contract.py
           test -s deploy/Caddyfile
           test -s deploy/docker-compose.production.yml

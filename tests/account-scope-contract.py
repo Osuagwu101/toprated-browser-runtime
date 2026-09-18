@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from pathlib import Path
 
 checks = {
@@ -9,7 +9,7 @@ checks = {
     ],
     "api/app/Http/Controllers/ToolAuthController.php": [
         "accountScope($request)",
-        "identities->save($tool, ['persistent_profile' => true], null, $accountScope)",
+        "identities->save($tool, $normalizedState, null, $accountScope)",
         "markVerified($tool, $accountScope)",
     ],
     "api/app/Services/PersistentBrowserIdentity.php": [
@@ -20,10 +20,18 @@ checks = {
         "'account_scope' => $accountScope",
         "account_scope_changed",
         "operatorWriterId($toolSlug, $accountScope)",
+        "concurrent writers may use the same approved SaaS account",
     ],
     "api/database/migrations/2026_09_15_000006_scope_identity_by_account.php": [
         "$table->primary(['tool_slug', 'account_scope'])",
         "$table->string('account_scope', 191)->default('legacy')->index()",
+    ],
+}
+
+forbidden = {
+    "api/app/Services/SessionManager.php": [
+        "ACCOUNT_SESSION_ACTIVE",
+        "$accountSessionExists",
     ],
 }
 
@@ -32,5 +40,11 @@ for filename, needles in checks.items():
     for needle in needles:
         if needle not in content:
             raise SystemExit(f"account-scope contract missing {needle!r} in {filename}")
+
+for filename, needles in forbidden.items():
+    content = Path(filename).read_text()
+    for needle in needles:
+        if needle in content:
+            raise SystemExit(f"account-scope contract forbids {needle!r} in {filename}")
 
 print("account_scope_contract=pass")
