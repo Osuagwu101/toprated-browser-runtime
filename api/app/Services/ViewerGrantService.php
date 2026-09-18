@@ -49,10 +49,12 @@ final class ViewerGrantService
         $signature = $this->base64Url(hash_hmac('sha256', $encoded, $secret, true));
         $token = $encoded.'.'.$signature;
 
+        $native = config('browser.native_handoff_enabled', false) === true;
         return [
-            'url' => $baseUrl.'/viewer/'.rawurlencode($workerSessionId).'#'.rawurlencode($token),
+            'url' => $baseUrl.($native ? '/native/' : '/viewer/').rawurlencode($workerSessionId).'#'.rawurlencode($token),
             'expiresAt' => gmdate('c', $payload['exp']),
-            'tokenTransport' => 'url-fragment-to-bearer',
+            'tokenTransport' => $native ? 'url-fragment-to-http-only-native-session' : 'url-fragment-to-bearer',
+            'transport' => $native ? 'native-rfb' : 'viewer-websocket',
             'rawCdpExposed' => false,
         ];
     }
