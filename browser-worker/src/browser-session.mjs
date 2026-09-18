@@ -14,6 +14,19 @@ export const VIEWPORT_MIN_HEIGHT = 568;
 export const MAX_SUPPORTED_BROWSER_SESSIONS = 15;
 export const RUNTIME_PHASE = 6;
 
+function waitForDisplay(display, timeoutMs = 5000) {
+  const socket = `/tmp/.X11-unix/X${String(display).replace(':', '')}`;
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (existsSync(socket)) return resolve();
+      if (Date.now() >= deadline) return reject(new Error('Virtual browser display did not start.'));
+      setTimeout(check, 40);
+    };
+    check();
+  });
+}
+
 export function normalizeWarmBrowserSlots(value, maxSessions) {
   const slots = Number(value || 0);
   const maximum = Math.min(3, Math.max(0, Number(maxSessions) - 1));
@@ -227,6 +240,7 @@ export class BrowserSessionController {
     this.startingCount = 0;
     this.warmRefillPromise = null;
     this.warmRefillDisabled = false;
+    this.nativeDisplays = new Set();
   }
 
   get status() {
@@ -367,6 +381,12 @@ export class BrowserSessionController {
     const executablePath = String(options?.executablePath || this.executablePath);
     if (!existsSync(executablePath)) throw new Error(`Chromium executable not found: ${executablePath}`);
     if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
+    if (options?.nativeTransport === true && this.displayMode !== 'virtual-display') {
+      throw new Error('Native handoff requires BROWSER_DISPLAY_MODE=virtual-display.');
+    }
+    if (options?.nativeTransport === true && (!existsSync('/usr/bin/Xvfb') || !existsSync('/usr/bin/x11vnc'))) {
+      throw new Error('Native handoff display components are unavailable.');
+    }
     this.startingCount += 1;
     const safeUrl = validateNavigationUrl(url);
     let profileLease = null;
@@ -407,14 +427,34 @@ export class BrowserSessionController {
       '--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
       ...(passwordStore === 'basic' ? ['--password-store=basic'] : []),
       `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,`--user-data-dir=${userDataDir}`,
-      ...(restoreLastSession ? ['--restore-last-session'] : [profileLease ? safeUrl : 'about:blank']),
+      ...(restoreLastSession ? ['--restore-last-session'] : options?.nativeTransport ? [`--app=${safeUrl}`] : [profileLease ? safeUrl : 'about:blank']),
     ];
-    const launcher = this.displayMode === 'virtual-display' ? this.xvfbRunPath : executablePath;
-    const launcherArgs = this.displayMode === 'virtual-display'
+    let xvfbProcess = null;
+    let nativeDisplay = null;
+    let nativeVncProcess = null;
+    let nativeVncPort = null;
+    if (options?.nativeTransport === true) {
+      for (let number = 90; number <= 190; number += 1) {
+        const candidate = `:${number}`;
+        if (!this.nativeDisplays.has(candidate) && !existsSync(`/tmp/.X11-unix/X${number}`)) { nativeDisplay = candidate; break; }
+      }
+      if (!nativeDisplay) throw new Error('No native browser display is available.');
+      this.nativeDisplays.add(nativeDisplay);
+      xvfbProcess = spawn('/usr/bin/Xvfb', [nativeDisplay, '-screen', '0', `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, '-nolisten', 'tcp', '-ac'], {
+        stdio: ['ignore', 'ignore', 'pipe'], detached: true,
+      });
+      try { await waitForDisplay(nativeDisplay); } catch (error) { try { killProcessGroup(xvfbProcess.pid, 'SIGKILL'); } catch {} this.nativeDisplays.delete(nativeDisplay); throw error; }
+      nativeVncPort = 5900 + Number(nativeDisplay.slice(1));
+      nativeVncProcess = spawn('/usr/bin/x11vnc', ['-display', nativeDisplay, '-localhost', '-nopw', '-forever', '-shared', '-rfbport', String(nativeVncPort), '-quiet'], {
+        stdio: ['ignore', 'ignore', 'pipe'], detached: true,
+      });
+    }
+    const launcher = options?.nativeTransport === true ? executablePath : this.displayMode === 'virtual-display' ? this.xvfbRunPath : executablePath;
+    const launcherArgs = options?.nativeTransport === true ? chromiumArgs : this.displayMode === 'virtual-display'
       ? ['-a', '-s', `-screen 0 ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}x24`, executablePath, ...chromiumArgs]
       : ['--headless=new', ...chromiumArgs];
     const browserProcess = spawn(launcher, launcherArgs, {
-      env: buildBrowserProcessEnvironment(suppliedUserDataDir),
+      env: { ...buildBrowserProcessEnvironment(suppliedUserDataDir), ...(nativeDisplay ? { DISPLAY: nativeDisplay } : {}) },
       stdio: ['ignore', 'ignore', 'pipe'],
       detached: true,
     });
@@ -447,6 +487,7 @@ export class BrowserSessionController {
         viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
         viewerStreamStop: null,
         profileLease,
+        nativeVnc: nativeVncProcess && nativeDisplay ? { display: nativeDisplay, port: nativeVncPort, xvfbProcess, vncProcess: nativeVncProcess } : null,
       });
       browserProcess.once('exit', () => {
         if (!sessionId) return;
@@ -499,7 +540,7 @@ export class BrowserSessionController {
       return this.getStatus(sessionId);
     } catch (error) {
       if (sessionId && this.sessions.has(sessionId)) { try { await this.stop(sessionId); } catch {} }
-      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } await waitForExit(browserProcess, 2000); if (!preserveUserDataDir) rmSync(userDataDir, { recursive: true, force: true }); profileLease?.release(); }
+      else { if (!killProcessGroup(browserProcess.pid, 'SIGKILL')) { try { browserProcess.kill('SIGKILL'); } catch {} } try { nativeVncProcess && killProcessGroup(nativeVncProcess.pid, 'SIGKILL'); xvfbProcess && killProcessGroup(xvfbProcess.pid, 'SIGKILL'); } catch {} if (nativeDisplay) this.nativeDisplays.delete(nativeDisplay); await waitForExit(browserProcess, 2000); if (!preserveUserDataDir) rmSync(userDataDir, { recursive: true, force: true }); profileLease?.release(); }
       const detail = stderr.trim().slice(-1500);
       const wrapped = new Error(detail ? `${error.message} Chromium: ${detail}` : error.message);
       if (error?.statusCode) wrapped.statusCode = error.statusCode;
@@ -556,6 +597,11 @@ export class BrowserSessionController {
   }
   async navigateOnly(url) { return this.navigate(this.onlySessionId(), url); }
   async captureFrame(sessionId) { const session = this.assertSession(sessionId); const result = await session.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, fromSurface: true, captureBeyondViewport: false }, 10000); if (!result.data) throw new Error('Chromium did not return a viewer frame.'); return Buffer.from(result.data, 'base64'); }
+  nativeVncPort(sessionId) {
+    const native = this.assertSession(sessionId).nativeVnc;
+    if (!native || !Number.isInteger(native.port)) throw Object.assign(new Error('This browser session is not using native handoff.'), { statusCode: 409 });
+    return native.port;
+  }
   async resizeViewerViewport(sessionId, width, height) {
     const session = this.assertSession(sessionId);
     const { width: nextWidth, height: nextHeight } = resolveViewerViewport(width, height);
@@ -655,6 +701,11 @@ export class BrowserSessionController {
     const trackedPids = [...new Set([...collectProcessTree(rootPid), ...collectProcessGroup(rootPid)])];
     if (session.viewerStreamStop) { try { await session.viewerStreamStop(); } catch {} }
     session.cdp.close();
+    if (session.nativeVnc) {
+      try { killProcessGroup(session.nativeVnc.vncProcess.pid, 'SIGTERM'); } catch {}
+      try { killProcessGroup(session.nativeVnc.xvfbProcess.pid, 'SIGTERM'); } catch {}
+      this.nativeDisplays.delete(session.nativeVnc.display);
+    }
     if (!killProcessGroup(rootPid, 'SIGTERM')) { try { session.process.kill('SIGTERM'); } catch {} }
     let rootExited = await waitForExit(session.process, 5000); let groupPids = collectProcessGroup(rootPid);
     if (!rootExited || groupPids.length) { if (!killProcessGroup(rootPid, 'SIGKILL')) { try { session.process.kill('SIGKILL'); } catch {} } rootExited = await waitForExit(session.process, 2000); }
