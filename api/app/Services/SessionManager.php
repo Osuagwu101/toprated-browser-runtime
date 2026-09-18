@@ -134,7 +134,14 @@ final class SessionManager
         try {
             $workerStatus = $interactiveAuthentication
                 ? $this->worker->startInteractiveAuthentication($launchUrl, (string) ($persistentProfile['toolSlug'] ?? $toolSlug), (string) ($persistentProfile['accountScope'] ?? $accountScope))
-                : $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication, $persistentProfile);
+                : $this->worker->start(
+                    $launchUrl,
+                    $browserState,
+                    $browserStatePolicy,
+                    $authentication,
+                    $persistentProfile,
+                    config('browser.native_handoff_enabled', false) === true && ! str_ends_with($toolSlug, '-admin-bootstrap'),
+                );
         } catch (RuntimeApiException $exception) {
             $failureCode = in_array($exception->errorCode, ['BROWSER_STATE_INVALID', 'BROWSER_STATE_TOO_LARGE', 'TOOL_AUTH_NOT_VERIFIED'], true)
                 ? $exception->errorCode
