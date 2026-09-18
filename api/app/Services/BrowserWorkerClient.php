@@ -40,6 +40,7 @@ final class BrowserWorkerClient
         array $browserStatePolicy = [],
         array $authentication = [],
         ?array $persistentProfile = null,
+        bool $nativeTransport = false,
     ): array {
         $payload = [
             'url' => $launchUrl,
@@ -51,6 +52,9 @@ final class BrowserWorkerClient
         }
         if ($persistentProfile !== null) {
             $payload['persistentProfile'] = $persistentProfile;
+        }
+        if ($nativeTransport) {
+            $payload['nativeTransport'] = true;
         }
 
         $authenticationTimeout = (int) ($authentication['timeoutSeconds'] ?? 0);
