@@ -41,6 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/typecheck.sh
+          python3 tests/concurrent-launch-contract.py
           node --test browser-worker/test/*.test.mjs
           grep -F 'BROWSER_IDENTITY_ENCRYPTION_KEY' .env.example docker-compose.yml api/config/browser.php scripts/phase14-bootstrap-ubuntu.sh
           grep -F 'BROWSER_STATE_INPUT_FORBIDDEN' api/app/Http/Controllers/SessionController.php tests/persistent-browser-identity-e2e.py
