@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const server = readFileSync(new URL('../src/server.mjs', import.meta.url), 'utf8');
 const page = readFileSync(new URL('../src/viewer-page.mjs', import.meta.url), 'utf8');
+const browserSession = readFileSync(new URL('../src/browser-session.mjs', import.meta.url), 'utf8');
 
 test('WebSocket input hot path is ordered and skips legacy per-input metadata refresh', () => {
   assert.match(server, /let inputQueue = Promise\.resolve\(\)/);
@@ -20,4 +21,9 @@ test('large paste is chunked below the runtime text-input bound', () => {
   assert.match(page, /offset\+=1800/);
   assert.match(page, /value\.slice\(offset,offset\+1800\)/);
   assert.match(page, /if\(text\)textInput\(text\)/);
+});
+
+test('ordered WebSocket input does not add artificial key or scroll waits', () => {
+  assert.doesNotMatch(browserSession, /mouseWheel[\s\S]*?await sleep\(60\)/);
+  assert.doesNotMatch(browserSession, /dispatchKeyEvent[\s\S]*?await sleep\(30\)/);
 });
