@@ -27,4 +27,7 @@ test('Viewer UX V3 removes the permanent remote-browser header chrome', () => {
   assert.doesNotMatch(html, /<header>/);
   assert.match(html, /#surface\{position:absolute;inset:0/);
   assert.match(html, /#frame\{display:block;width:100%;height:100%/);
+  assert.match(html, /object-fit:contain/);
+  assert.match(html, /Math\.max\(320,Math\.round\(rect\.width\)\)/);
+  assert.match(html, /Math\.max\(568,Math\.round\(rect\.height\)\)/);
 });
