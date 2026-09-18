@@ -30,7 +30,10 @@ final class SessionManager
         bool $interactiveAuthentication = false,
         ?array $persistentProfile = null,
     ): array {
-        return $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope, $interactiveAuthentication, $persistentProfile): array {
+        // Reserve capacity quickly under the global lock, then release it
+        // before Chromium starts. Holding this lock across browser startup
+        // made otherwise independent writer launches queue one-by-one.
+        $reserved = $this->withCreationLock(function () use ($writerId, $toolSlug, $launchUrl, $browserState, $browserStatePolicy, $authentication, $accountScope): array {
             $maxSessions = $this->assertCapacityConfiguration();
             $lifecycle = $this->lifecycleConfiguration();
             $workerSessions = $this->workerSessionIndex();
@@ -50,13 +53,26 @@ final class SessionManager
                 $existing = null;
             }
 
+            // An account scope identifies the administrator-approved tool
+            // identity to clone, not an exclusive writer lease. Every writer
+            // receives a separate browser process and temporary profile, so
+            // concurrent writers may use the same approved SaaS account
+            // without seeing or changing each other's browser state.
+
             $this->toolAuthentication->assertLaunchAllowed($toolSlug, $authentication, $accountScope);
 
             if ($existing !== null) {
-                $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions, $authentication): ?array {
+                $reused = $this->withSessionLock($existing->id, function () use ($existing, $workerSessions, $authentication, $lifecycle): ?array {
                     $fresh = BrowserSession::query()->find($existing->id);
                     if ($fresh === null || ! in_array($fresh->status, self::OPEN_STATUSES, true)) {
                         return null;
+                    }
+
+                    if ($fresh->status === 'starting') {
+                        $createdAt = $fresh->created_at ?? now();
+                        if ($createdAt->copy()->addSeconds($lifecycle['startupGraceSeconds'])->gt(now())) {
+                            throw new RuntimeApiException('WRITER_SESSION_STARTING', 409, 'The writer browser is still starting.');
+                        }
                     }
 
                     if ($fresh->worker_session_id !== null && isset($workerSessions[$fresh->worker_session_id])) {
@@ -106,67 +122,94 @@ final class SessionManager
                 'lease_expires_at' => $createdAt->copy()->addSeconds($lifecycle['leaseSeconds']),
             ]);
 
-            try {
-                $workerStatus = $interactiveAuthentication
-                    ? $this->worker->startInteractiveAuthentication($launchUrl, (string) ($persistentProfile['toolSlug'] ?? $toolSlug), (string) ($persistentProfile['accountScope'] ?? $accountScope))
-                    : $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication, $persistentProfile);
-            } catch (RuntimeApiException $exception) {
-                $failureCode = in_array($exception->errorCode, ['BROWSER_STATE_INVALID', 'BROWSER_STATE_TOO_LARGE', 'TOOL_AUTH_NOT_VERIFIED'], true)
-                    ? $exception->errorCode
-                    : 'WORKER_START_FAILED';
-                $this->markFailed($session, $failureCode, 'The worker could not create a verified browser session.');
-                if ($exception->errorCode === 'TOOL_AUTH_NOT_VERIFIED') {
-                    $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED', $accountScope);
-                    throw $this->toolAuthentication->reauthRequired();
-                }
-                throw $exception;
-            }
+            return ['reservedSession' => $session];
+        });
 
-            if (($workerStatus['active'] ?? false) !== true || ! is_string($workerStatus['sessionId'] ?? null) || $workerStatus['sessionId'] === '') {
-                $this->markFailed($session, 'WORKER_PROTOCOL_ERROR', 'The worker did not return an active session identifier.');
-                throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker did not create a valid session.');
-            }
+        if (! isset($reserved['reservedSession']) || ! $reserved['reservedSession'] instanceof BrowserSession) {
+            return $reserved;
+        }
 
-            $workerSessionId = $workerStatus['sessionId'];
-            if (($authentication['required'] ?? false) === true
-                && ($workerStatus['authentication']['verified'] ?? false) !== true) {
-                try {
-                    $stop = $this->worker->stop($workerSessionId);
-                    $this->assertCleanStop($stop, $workerSessionId);
-                } catch (RuntimeApiException $cleanupException) {
-                    $this->markFailed($session, 'WORKER_CLEANUP_FAILED', 'The unverified browser session could not be proven cleanly terminated.');
-                    throw $cleanupException;
-                }
-                $this->markFailed($session, 'TOOL_AUTH_NOT_VERIFIED', 'The configured tool did not reach its authenticated state.');
+        /** @var BrowserSession $session */
+        $session = $reserved['reservedSession'];
+        try {
+            $workerStatus = $interactiveAuthentication
+                ? $this->worker->startInteractiveAuthentication($launchUrl, (string) ($persistentProfile['toolSlug'] ?? $toolSlug), (string) ($persistentProfile['accountScope'] ?? $accountScope))
+                : $this->worker->start($launchUrl, $browserState, $browserStatePolicy, $authentication, $persistentProfile);
+        } catch (RuntimeApiException $exception) {
+            $failureCode = in_array($exception->errorCode, ['BROWSER_STATE_INVALID', 'BROWSER_STATE_TOO_LARGE', 'TOOL_AUTH_NOT_VERIFIED'], true)
+                ? $exception->errorCode
+                : 'WORKER_START_FAILED';
+            $this->failReservedSession($session->id, $failureCode, 'The worker could not create a verified browser session.');
+            if ($exception->errorCode === 'TOOL_AUTH_NOT_VERIFIED') {
                 $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED', $accountScope);
                 throw $this->toolAuthentication->reauthRequired();
             }
+            throw $exception;
+        }
 
-            $alreadyTracked = BrowserSession::query()
-                ->where('worker_session_id', $workerSessionId)
-                ->where('id', '!=', $session->id)
-                ->exists();
-            if ($alreadyTracked) {
-                $this->markFailed($session, 'WORKER_SESSION_COLLISION', 'The worker returned a browser session identifier already tracked by another record.');
-                throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker returned a duplicate session identifier.');
+        if (($workerStatus['active'] ?? false) !== true || ! is_string($workerStatus['sessionId'] ?? null) || $workerStatus['sessionId'] === '') {
+            $this->failReservedSession($session->id, 'WORKER_PROTOCOL_ERROR', 'The worker did not return an active session identifier.');
+            throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker did not create a valid session.');
+        }
+
+        $workerSessionId = $workerStatus['sessionId'];
+        if (($authentication['required'] ?? false) === true
+            && ($workerStatus['authentication']['verified'] ?? false) !== true) {
+            try {
+                $stop = $this->worker->stop($workerSessionId);
+                $this->assertCleanStop($stop, $workerSessionId);
+            } catch (RuntimeApiException $cleanupException) {
+                $this->failReservedSession($session->id, 'WORKER_CLEANUP_FAILED', 'The unverified browser session could not be proven cleanly terminated.');
+                throw $cleanupException;
             }
+            $this->failReservedSession($session->id, 'TOOL_AUTH_NOT_VERIFIED', 'The configured tool did not reach its authenticated state.');
+            $this->toolAuthentication->requireReauthentication($toolSlug, 'TOOL_AUTH_NOT_VERIFIED', $accountScope);
+            throw $this->toolAuthentication->reauthRequired();
+        }
 
-            $activatedAt = now();
-            $session->forceFill([
-                'status' => 'active',
-                'worker_session_id' => $workerSessionId,
-                'started_at' => $activatedAt,
-                'lease_expires_at' => $activatedAt->copy()->addSeconds($lifecycle['leaseSeconds']),
-                'failure_code' => null,
-                'failure_detail' => null,
-            ])->save();
+        try {
+            $active = $this->withSessionLock($session->id, function () use ($session, $workerSessionId): BrowserSession {
+                $fresh = BrowserSession::query()->find($session->id);
+                if ($fresh === null || $fresh->status !== 'starting') {
+                    throw new RuntimeApiException('SESSION_START_ABORTED', 409, 'The browser session was closed before startup completed.');
+                }
 
-            if (($authentication['required'] ?? false) === true) {
-                $this->toolAuthentication->markVerified($toolSlug, $accountScope);
+                $alreadyTracked = BrowserSession::query()
+                    ->where('worker_session_id', $workerSessionId)
+                    ->where('id', '!=', $fresh->id)
+                    ->exists();
+                if ($alreadyTracked) {
+                    $this->markFailed($fresh, 'WORKER_SESSION_COLLISION', 'The worker returned a browser session identifier already tracked by another record.');
+                    throw new RuntimeApiException('WORKER_PROTOCOL_ERROR', 502, 'The browser worker returned a duplicate session identifier.');
+                }
+
+                $activatedAt = now();
+                $fresh->forceFill([
+                    'status' => 'active',
+                    'worker_session_id' => $workerSessionId,
+                    'started_at' => $activatedAt,
+                    'lease_expires_at' => $activatedAt->copy()->addSeconds($this->lifecycleConfiguration()['leaseSeconds']),
+                    'failure_code' => null,
+                    'failure_detail' => null,
+                ])->save();
+
+                return $fresh->fresh();
+            });
+        } catch (RuntimeApiException $exception) {
+            try {
+                $stop = $this->worker->stop($workerSessionId);
+                $this->assertCleanStop($stop, $workerSessionId);
+            } catch (RuntimeApiException) {
+                $this->failReservedSession($session->id, 'WORKER_CLEANUP_FAILED', 'The rejected browser session could not be proven cleanly terminated.');
             }
+            throw $exception;
+        }
 
-            return $this->present($session->fresh(), false);
-        });
+        if (($authentication['required'] ?? false) === true) {
+            $this->toolAuthentication->markVerified($toolSlug, $accountScope);
+        }
+
+        return $this->present($active, false);
     }
 
     public function startOperatorAuthentication(string $toolSlug, string $adminLoginUrl, array $browserStatePolicy, string $accountScope = 'legacy'): array
@@ -755,6 +798,16 @@ final class SessionManager
             'failure_code' => $code,
             'failure_detail' => $detail,
         ])->save();
+    }
+
+    private function failReservedSession(string $sessionId, string $code, string $detail): void
+    {
+        $this->withSessionLock($sessionId, function () use ($sessionId, $code, $detail): void {
+            $session = BrowserSession::query()->find($sessionId);
+            if ($session !== null && $session->status === 'starting') {
+                $this->markFailed($session, $code, $detail);
+            }
+        });
     }
 
     private function assertCapacityConfiguration(): int

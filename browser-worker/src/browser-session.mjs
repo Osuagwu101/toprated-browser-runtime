@@ -9,8 +9,19 @@ import { AccountBrowserProfileLease, clearStaleChromeArtifacts } from './account
 const DEFAULT_TEST_URL = 'data:text/html,%3Ctitle%3EPhase%206%20Browser%20Test%3C/title%3E%3Ch1%3ESafe%20test%20page%3C/h1%3E';
 export const VIEWPORT_WIDTH = 1440;
 export const VIEWPORT_HEIGHT = 900;
+export const VIEWPORT_MIN_WIDTH = 320;
+export const VIEWPORT_MIN_HEIGHT = 568;
 export const MAX_SUPPORTED_BROWSER_SESSIONS = 15;
 export const RUNTIME_PHASE = 6;
+
+export function normalizeWarmBrowserSlots(value, maxSessions) {
+  const slots = Number(value || 0);
+  const maximum = Math.min(3, Math.max(0, Number(maxSessions) - 1));
+  if (!Number.isInteger(slots) || slots < 0 || slots > maximum) {
+    throw new Error(`WARM_BROWSER_SLOTS must be an integer between 0 and ${maximum}.`);
+  }
+  return slots;
+}
 
 export function normalizeBrowserDisplayMode(value) {
   const mode = String(value || 'headless').trim().toLowerCase();
@@ -55,7 +66,17 @@ function numeric(value, field) {
 }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
-export function validateViewerInput(input) {
+export function resolveViewerViewport(width, height) {
+  const requestedWidth = Math.max(1, Math.round(numeric(width, 'width')));
+  const requestedHeight = Math.max(1, Math.round(numeric(height, 'height')));
+  const scale = Math.min(1, VIEWPORT_WIDTH / requestedWidth, VIEWPORT_HEIGHT / requestedHeight);
+  return {
+    width: clamp(Math.round(requestedWidth * scale), VIEWPORT_MIN_WIDTH, VIEWPORT_WIDTH),
+    height: clamp(Math.round(requestedHeight * scale), VIEWPORT_MIN_HEIGHT, VIEWPORT_HEIGHT),
+  };
+}
+
+export function validateViewerInput(input, viewport = { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('Viewer input must be a JSON object.'), { statusCode: 400 });
   const type = String(input.type || '');
   if (type === 'mouse') {
@@ -63,9 +84,9 @@ export function validateViewerInput(input) {
     if (!['moved', 'pressed', 'released'].includes(event)) throw Object.assign(new Error('Mouse event must be moved, pressed, or released.'), { statusCode: 400 });
     const button = String(input.button || (event === 'moved' ? 'none' : 'left'));
     if (!['none', 'left', 'middle', 'right'].includes(button)) throw Object.assign(new Error('Mouse button is invalid.'), { statusCode: 400 });
-    return { type, event, button, x: clamp(numeric(input.x, 'x'), 0, VIEWPORT_WIDTH - 1), y: clamp(numeric(input.y, 'y'), 0, VIEWPORT_HEIGHT - 1) };
+    return { type, event, button, x: clamp(numeric(input.x, 'x'), 0, Number(viewport.width || VIEWPORT_WIDTH) - 1), y: clamp(numeric(input.y, 'y'), 0, Number(viewport.height || VIEWPORT_HEIGHT) - 1) };
   }
-  if (type === 'scroll') return { type, x: clamp(numeric(input.x, 'x'), 0, VIEWPORT_WIDTH - 1), y: clamp(numeric(input.y, 'y'), 0, VIEWPORT_HEIGHT - 1), deltaX: clamp(numeric(input.deltaX ?? 0, 'deltaX'), -2000, 2000), deltaY: clamp(numeric(input.deltaY ?? 0, 'deltaY'), -2000, 2000) };
+  if (type === 'scroll') return { type, x: clamp(numeric(input.x, 'x'), 0, Number(viewport.width || VIEWPORT_WIDTH) - 1), y: clamp(numeric(input.y, 'y'), 0, Number(viewport.height || VIEWPORT_HEIGHT) - 1), deltaX: clamp(numeric(input.deltaX ?? 0, 'deltaX'), -2000, 2000), deltaY: clamp(numeric(input.deltaY ?? 0, 'deltaY'), -2000, 2000) };
   if (type === 'text') {
     const text = String(input.text ?? '');
     if (!text || text.length > 2000) throw Object.assign(new Error('Text input must contain between 1 and 2000 characters.'), { statusCode: 400 });
@@ -104,7 +125,7 @@ function collectProcessTree(rootPid) {
 }
 
 class CdpClient {
-  constructor(webSocketUrl) { this.webSocketUrl = webSocketUrl; this.socket = null; this.nextId = 1; this.pending = new Map(); this.eventWaiters = new Map(); }
+  constructor(webSocketUrl) { this.webSocketUrl = webSocketUrl; this.socket = null; this.nextId = 1; this.pending = new Map(); this.eventWaiters = new Map(); this.eventListeners = new Map(); }
   async connect(timeoutMs = 5000) {
     const socket = new WebSocket(this.webSocketUrl); this.socket = socket;
     await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('CDP WebSocket connection timed out.')), timeoutMs); socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true }); socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('CDP WebSocket connection failed.')); }, { once: true }); });
@@ -112,6 +133,7 @@ class CdpClient {
       let message; try { message = JSON.parse(String(event.data)); } catch { return; }
       if (message.id && this.pending.has(message.id)) { const { resolve, reject, timer } = this.pending.get(message.id); clearTimeout(timer); this.pending.delete(message.id); if (message.error) reject(new Error(message.error.message || 'CDP command failed.')); else resolve(message.result || {}); return; }
       if (message.method && this.eventWaiters.has(message.method)) { const waiters = this.eventWaiters.get(message.method); this.eventWaiters.delete(message.method); for (const waiter of waiters) { clearTimeout(waiter.timer); waiter.resolve(message.params || {}); } }
+      if (message.method && this.eventListeners.has(message.method)) { for (const listener of this.eventListeners.get(message.method)) { try { listener(message.params || {}); } catch {} } }
     });
     socket.addEventListener('close', () => { for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(new Error('CDP connection closed.')); } this.pending.clear(); });
   }
@@ -121,7 +143,8 @@ class CdpClient {
     return new Promise((resolve, reject) => { const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP command timed out: ${method}`)); }, timeoutMs); this.pending.set(id, { resolve, reject, timer }); this.socket.send(JSON.stringify({ id, method, params })); });
   }
   waitForEvent(method, timeoutMs = 5000) { return new Promise((resolve, reject) => { const timer = setTimeout(() => { const current = this.eventWaiters.get(method) || []; this.eventWaiters.set(method, current.filter((item) => item.resolve !== resolve)); reject(new Error(`CDP event timed out: ${method}`)); }, timeoutMs); const waiters = this.eventWaiters.get(method) || []; waiters.push({ resolve, reject, timer }); this.eventWaiters.set(method, waiters); }); }
-  close() { try { this.socket?.close(); } catch {} this.socket = null; }
+  on(method, listener) { const listeners = this.eventListeners.get(method) || new Set(); listeners.add(listener); this.eventListeners.set(method, listeners); return () => { listeners.delete(listener); if (!listeners.size) this.eventListeners.delete(method); }; }
+  close() { try { this.socket?.close(); } catch {} this.socket = null; this.eventListeners.clear(); }
 }
 
 async function waitForDevToolsPort(userDataDir, processRef, timeoutMs = 10000) {
@@ -191,15 +214,19 @@ async function safeAuthenticationFailureContext(cdp, policyInput = {}) {
 }
 
 export class BrowserSessionController {
-  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
+  constructor({ executablePath = process.env.CHROMIUM_EXECUTABLE || '/usr/bin/chromium', maxSessions = Number(process.env.MAX_BROWSER_SESSIONS || 3), warmSlots = Number(process.env.WARM_BROWSER_SLOTS || 0), displayMode = process.env.BROWSER_DISPLAY_MODE || 'headless', xvfbRunPath = process.env.XVFB_RUN_EXECUTABLE || '/usr/bin/xvfb-run', navigationTimeoutMs = process.env.BROWSER_NAVIGATION_TIMEOUT_MS || 45000 } = {}) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SUPPORTED_BROWSER_SESSIONS) throw new Error(`MAX_BROWSER_SESSIONS must be an integer between 1 and ${MAX_SUPPORTED_BROWSER_SESSIONS}.`);
     this.executablePath = executablePath;
     this.maxSessions = maxSessions;
+    this.warmSlots = normalizeWarmBrowserSlots(warmSlots, maxSessions);
     this.displayMode = normalizeBrowserDisplayMode(displayMode);
     this.xvfbRunPath = xvfbRunPath;
     this.navigationTimeoutMs = normalizeBrowserNavigationTimeoutMs(navigationTimeoutMs);
     this.sessions = new Map();
+    this.warmSessions = new Map();
     this.startingCount = 0;
+    this.warmRefillPromise = null;
+    this.warmRefillDisabled = false;
   }
 
   get status() {
@@ -211,7 +238,7 @@ export class BrowserSessionController {
 
   listStatus() {
     this.pruneExited();
-    return { phase: RUNTIME_PHASE, activeCount: this.sessions.size, startingCount: this.startingCount, maxSessions: this.maxSessions, sessions: [...this.sessions.values()].map((session) => this.present(session)) };
+    return { phase: RUNTIME_PHASE, activeCount: this.sessions.size, startingCount: this.startingCount, warmCount: this.warmSessions.size, warmSlots: this.warmSlots, maxSessions: this.maxSessions, sessions: [...this.sessions.values()].map((session) => this.present(session)) };
   }
 
   present(session) {
@@ -222,18 +249,32 @@ export class BrowserSessionController {
       pid: session.process.pid,
       url: session.url,
       title: session.title,
-      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      viewport: session.viewport || { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
       viewer: 'restricted',
       displayMode: this.displayMode,
       authentication: { required: session.authenticationRequired === true, verified: session.authenticationVerified === true },
     };
   }
   isProcessAlive(session) { return session.process.exitCode === null && session.process.signalCode === null && existsSync(`/proc/${session.process.pid}`); }
-  pruneExited() { for (const [sessionId, session] of this.sessions.entries()) if (!this.isProcessAlive(session)) this.scheduleUnexpectedExitCleanup(sessionId); }
+  pruneExited() {
+    for (const [sessionId, session] of this.sessions.entries()) if (!this.isProcessAlive(session)) this.scheduleUnexpectedExitCleanup(sessionId);
+    for (const [sessionId, session] of this.warmSessions.entries()) if (!this.isProcessAlive(session)) this.scheduleUnexpectedWarmCleanup(sessionId);
+  }
   scheduleUnexpectedExitCleanup(sessionId) {
     const session = this.sessions.get(sessionId); if (!session) return;
     this.sessions.delete(sessionId);
-    void this.cleanupSession(session).then((cleanup) => console.log(JSON.stringify({ event: 'browser_crash_reaped', sessionId, cleanup }))).catch((error) => console.error(JSON.stringify({ event: 'browser_crash_cleanup_failed', sessionId, message: String(error.message || error) })));
+    void this.cleanupSession(session)
+      .then((cleanup) => console.log(JSON.stringify({ event: 'browser_crash_reaped', sessionId, cleanup })))
+      .catch((error) => console.error(JSON.stringify({ event: 'browser_crash_cleanup_failed', sessionId, message: String(error.message || error) })))
+      .finally(() => this.scheduleWarmRefill());
+  }
+  scheduleUnexpectedWarmCleanup(sessionId) {
+    const session = this.warmSessions.get(sessionId); if (!session) return;
+    this.warmSessions.delete(sessionId);
+    void this.cleanupSession(session)
+      .then((cleanup) => console.log(JSON.stringify({ event: 'warm_browser_crash_reaped', sessionId, cleanup })))
+      .catch((error) => console.error(JSON.stringify({ event: 'warm_browser_crash_cleanup_failed', sessionId, message: String(error.message || error) })))
+      .finally(() => this.scheduleWarmRefill());
   }
   assertSession(sessionId) {
     const id = String(sessionId || ''); const session = this.sessions.get(id);
@@ -245,9 +286,84 @@ export class BrowserSessionController {
   has(sessionId) { this.pruneExited(); return this.sessions.has(String(sessionId || '')); }
   onlySessionId() { this.pruneExited(); if (this.sessions.size === 0) throw Object.assign(new Error('No browser session is active.'), { statusCode: 409 }); if (this.sessions.size !== 1) throw Object.assign(new Error('Legacy single-session operation is ambiguous while multiple browser sessions are active.'), { statusCode: 409 }); return this.sessions.keys().next().value; }
 
+  canRefillWarmSessions() {
+    return !this.warmRefillDisabled
+      && this.warmSlots > 0
+      && this.warmSessions.size < this.warmSlots
+      && this.sessions.size < this.maxSessions - this.warmSlots;
+  }
+
+  scheduleWarmRefill() {
+    if (this.warmRefillPromise || !this.canRefillWarmSessions()) return;
+    this.warmRefillPromise = Promise.resolve()
+      .then(() => this.refillWarmSessions())
+      .catch((error) => console.error(JSON.stringify({ event: 'warm_browser_refill_failed', message: String(error?.message || error) })))
+      .finally(() => { this.warmRefillPromise = null; });
+  }
+
+  async refillWarmSessions() {
+    while (this.canRefillWarmSessions()) {
+      const created = await this.start(DEFAULT_TEST_URL, { useWarm: false, refillWarm: false });
+      const session = this.sessions.get(created.sessionId);
+      if (!session) throw new Error('Warm browser launch did not create a session.');
+      this.sessions.delete(created.sessionId);
+      session.authenticationRequired = false;
+      session.authenticationVerified = false;
+      session.authorizedStateAllowedHosts = [];
+      this.warmSessions.set(created.sessionId, session);
+      console.log(JSON.stringify({ event: 'warm_browser_ready', sessionId: created.sessionId }));
+    }
+  }
+
+  async startFromWarmSession(url, options = {}) {
+    const entry = this.warmSessions.entries().next().value;
+    if (!entry) return this.start(url, { ...options, useWarm: false });
+    const [sessionId, session] = entry;
+    this.warmSessions.delete(sessionId);
+    this.sessions.set(sessionId, session);
+    const safeUrl = validateNavigationUrl(url);
+    let bootstrap = null;
+    let authenticationFailureContext = null;
+    try {
+      session.authenticationRequired = options?.authentication?.required === true;
+      session.authenticationVerified = false;
+      session.authorizedStateAllowedHosts = [];
+      bootstrap = await installBrowserState(session.cdp, options?.browserState, options?.browserStatePolicy || {}, safeUrl);
+      session.authorizedStateAllowedHosts = bootstrap.allowedHosts;
+      try {
+        await this.navigate(sessionId, safeUrl);
+      } finally {
+        await removeBrowserStateBootstrap(session.cdp, bootstrap.scriptIdentifier);
+      }
+      let authentication;
+      try {
+        authentication = await verifyAuthentication(session.cdp, options?.authentication || {});
+      } catch (error) {
+        authenticationFailureContext = await safeAuthenticationFailureContext(session.cdp, options?.authentication || {});
+        throw error;
+      }
+      session.authenticationRequired = authentication.required === true;
+      session.authenticationVerified = authentication.verified === true;
+      return this.getStatus(sessionId);
+    } catch (error) {
+      try { await this.stop(sessionId); } catch {}
+      if (!error?.code) error.code = 'BROWSER_WARM_SESSION_FAILED';
+      console.error(JSON.stringify({
+        event: 'warm_browser_activation_failed',
+        sessionId,
+        code: error.code,
+        ...(authenticationFailureContext ? { authenticationFailureContext } : {}),
+      }));
+      throw error;
+    } finally {
+      this.scheduleWarmRefill();
+    }
+  }
+
   async start(url = DEFAULT_TEST_URL, options = {}) {
     this.pruneExited();
-    if (this.sessions.size + this.startingCount >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
+    if (options?.useWarm !== false && !options?.persistentProfile && this.warmSessions.size > 0) return this.startFromWarmSession(url, options);
+    if (this.sessions.size + this.startingCount + this.warmSessions.size >= this.maxSessions) throw Object.assign(new Error('Browser worker capacity is full.'), { statusCode: 429 });
     const executablePath = String(options?.executablePath || this.executablePath);
     if (!existsSync(executablePath)) throw new Error(`Chromium executable not found: ${executablePath}`);
     if (this.displayMode === 'virtual-display' && !existsSync(this.xvfbRunPath)) throw new Error(`Virtual display launcher not found: ${this.xvfbRunPath}`);
@@ -328,9 +444,15 @@ export class BrowserSessionController {
         authenticationRequired: options?.authentication?.required === true,
         authenticationVerified: false,
         authorizedStateAllowedHosts: [],
+        viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+        viewerStreamStop: null,
         profileLease,
       });
-      browserProcess.once('exit', () => { if (sessionId && this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId); });
+      browserProcess.once('exit', () => {
+        if (!sessionId) return;
+        if (this.sessions.has(sessionId)) this.scheduleUnexpectedExitCleanup(sessionId);
+        else if (this.warmSessions.has(sessionId)) this.scheduleUnexpectedWarmCleanup(sessionId);
+      });
 
       // A persistent profile is opened only after the human-controlled
       // authentication browser has closed.  Before navigating the fresh
@@ -393,7 +515,10 @@ export class BrowserSessionController {
           : {}),
       }));
       throw wrapped;
-    } finally { this.startingCount -= 1; }
+    } finally {
+      this.startingCount -= 1;
+      if (options?.refillWarm !== false) this.scheduleWarmRefill();
+    }
   }
 
   async refreshMetadata(sessionId) {
@@ -431,13 +556,42 @@ export class BrowserSessionController {
   }
   async navigateOnly(url) { return this.navigate(this.onlySessionId(), url); }
   async captureFrame(sessionId) { const session = this.assertSession(sessionId); const result = await session.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, fromSurface: true, captureBeyondViewport: false }, 10000); if (!result.data) throw new Error('Chromium did not return a viewer frame.'); return Buffer.from(result.data, 'base64'); }
-  async sendViewerInput(sessionId, input) {
-    const session = this.assertSession(sessionId); const normalized = validateViewerInput(input);
+  async resizeViewerViewport(sessionId, width, height) {
+    const session = this.assertSession(sessionId);
+    const { width: nextWidth, height: nextHeight } = resolveViewerViewport(width, height);
+    await session.cdp.send('Emulation.setDeviceMetricsOverride', { width: nextWidth, height: nextHeight, deviceScaleFactor: 1, mobile: false });
+    session.viewport = { width: nextWidth, height: nextHeight };
+    return session.viewport;
+  }
+  async openViewerStream(sessionId, onFrame) {
+    const session = this.assertSession(sessionId);
+    if (typeof onFrame !== 'function') throw new Error('Viewer stream requires a frame callback.');
+    if (session.viewerStreamStop) await session.viewerStreamStop();
+    let active = true;
+    const off = session.cdp.on('Page.screencastFrame', (event) => {
+      if (!active) return;
+      const frameData = String(event?.data || '');
+      if (frameData) { try { onFrame(Buffer.from(frameData, 'base64'), event?.metadata || {}); } catch {} }
+      if (Number.isInteger(event?.sessionId)) void session.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+    });
+    await session.cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: VIEWPORT_WIDTH, maxHeight: VIEWPORT_HEIGHT, everyNthFrame: 1 }, 10000);
+    const stop = async () => {
+      if (!active) return; active = false; off();
+      try { await session.cdp.send('Page.stopScreencast', {}, 3000); } catch {}
+      if (session.viewerStreamStop === stop) session.viewerStreamStop = null;
+    };
+    session.viewerStreamStop = stop;
+    return stop;
+  }
+  async sendViewerInput(sessionId, input, { includeMetadata = true } = {}) {
+    const session = this.assertSession(sessionId); const normalized = validateViewerInput(input, session.viewport);
     if (normalized.type === 'mouse') { const type = normalized.event === 'moved' ? 'mouseMoved' : normalized.event === 'pressed' ? 'mousePressed' : 'mouseReleased'; await session.cdp.send('Input.dispatchMouseEvent', { type, x: normalized.x, y: normalized.y, button: normalized.button, clickCount: normalized.event === 'moved' ? 0 : 1 }); }
-    else if (normalized.type === 'scroll') { await session.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: normalized.x, y: normalized.y, deltaX: normalized.deltaX, deltaY: normalized.deltaY }); await sleep(60); }
+    else if (normalized.type === 'scroll') { await session.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: normalized.x, y: normalized.y, deltaX: normalized.deltaX, deltaY: normalized.deltaY }); }
     else if (normalized.type === 'text') await session.cdp.send('Input.insertText', { text: normalized.text });
-    else if (normalized.type === 'key') { const params = { key: normalized.key, code: normalized.code, modifiers: normalized.modifiers }; await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...params }); await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...params }); await sleep(30); }
-    return { inputAccepted: true, ...(await this.refreshMetadata(sessionId)) };
+    else if (normalized.type === 'key') { const params = { key: normalized.key, code: normalized.code, modifiers: normalized.modifiers }; await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...params }); await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...params }); }
+    return includeMetadata
+      ? { inputAccepted: true, ...(await this.refreshMetadata(sessionId)) }
+      : { inputAccepted: true };
   }
 
   async verifyAuthentication(sessionId, policy) {
@@ -499,6 +653,7 @@ export class BrowserSessionController {
   async cleanupSession(session) {
     const rootPid = session.process.pid;
     const trackedPids = [...new Set([...collectProcessTree(rootPid), ...collectProcessGroup(rootPid)])];
+    if (session.viewerStreamStop) { try { await session.viewerStreamStop(); } catch {} }
     session.cdp.close();
     if (!killProcessGroup(rootPid, 'SIGTERM')) { try { session.process.kill('SIGTERM'); } catch {} }
     let rootExited = await waitForExit(session.process, 5000); let groupPids = collectProcessGroup(rootPid);
@@ -519,7 +674,25 @@ export class BrowserSessionController {
     else session.profileLease?.abandon();
     return { rootExited, orphanPids, zombiePids };
   }
-  async stop(sessionId) { const id = String(sessionId || ''); const session = this.sessions.get(id); if (!session) return { active: false, phase: RUNTIME_PHASE, sessionId: id || null, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } }; this.sessions.delete(id); const pid = session.process.pid; const cleanup = await this.cleanupSession(session); return { active: false, phase: RUNTIME_PHASE, sessionId: id, pid, cleanup }; }
+  async stop(sessionId) {
+    const id = String(sessionId || ''); const session = this.sessions.get(id);
+    if (!session) return { active: false, phase: RUNTIME_PHASE, sessionId: id || null, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } };
+    this.sessions.delete(id);
+    const pid = session.process.pid;
+    const cleanup = await this.cleanupSession(session);
+    this.scheduleWarmRefill();
+    return { active: false, phase: RUNTIME_PHASE, sessionId: id, pid, cleanup };
+  }
   async stopOnly() { this.pruneExited(); if (this.sessions.size === 0) return { active: false, phase: RUNTIME_PHASE, cleanup: { rootExited: true, orphanPids: [], zombiePids: [] } }; return this.stop(this.onlySessionId()); }
-  async stopAll() { const results = []; for (const sessionId of [...this.sessions.keys()]) results.push(await this.stop(sessionId)); return results; }
+  async stopAll() {
+    const results = [];
+    this.warmRefillDisabled = true;
+    await this.warmRefillPromise?.catch(() => {});
+    for (const sessionId of [...this.sessions.keys()]) results.push(await this.stop(sessionId));
+    for (const [sessionId, session] of this.warmSessions.entries()) {
+      this.warmSessions.delete(sessionId);
+      results.push({ active: false, phase: RUNTIME_PHASE, sessionId, cleanup: await this.cleanupSession(session) });
+    }
+    return results;
+  }
 }

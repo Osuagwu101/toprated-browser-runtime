@@ -59,6 +59,8 @@ test('Phase 6 retains configurable capacity bounded to the blueprint target', ()
     phase: 6,
     activeCount: 0,
     startingCount: 0,
+    warmCount: 0,
+    warmSlots: 0,
     maxSessions: 3,
     sessions: [],
   });

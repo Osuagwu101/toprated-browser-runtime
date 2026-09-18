@@ -10,6 +10,8 @@ import { assertAllowedFields, assertNoQuery, readJson } from './request-security
 import { SessionPolicyStore } from './session-policy-store.mjs';
 import { buildViewerHtml } from './viewer-page.mjs';
 import { buildViewerSecurityHeaders } from './viewer-security.mjs';
+import { ViewerReconnectTicketStore } from './viewer-reconnect.mjs';
+import { acceptWebSocketUpgrade, createWebSocketPeer, parseViewerProtocols } from './viewer-websocket.mjs';
 
 const port = Number(process.env.PORT || 8081);
 const browserStateMaxBytes = Number(process.env.BROWSER_STATE_MAX_BYTES || 262144);
@@ -32,6 +34,8 @@ const viewerClientRateLimiter = new FixedWindowRateLimiter({
   maxBuckets: 4096,
 });
 const viewerSessionRateLimiter = new FixedWindowRateLimiter({ limit: viewerRateLimit, maxBuckets: 4096 });
+const viewerReconnectTickets = new ViewerReconnectTicketStore({ maxEntries: Math.max(16, controller.maxSessions * 4) });
+const consumedViewerBootstraps = new Map();
 
 let sessionCreatesInFlight = 0;
 let sessionCreatesSettled = Promise.resolve();
@@ -63,9 +67,33 @@ policyPruneTimer.unref();
 function commonHeaders(extra = {}) { return { 'cache-control': 'no-store, max-age=0', pragma: 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...extra }; }
 function writeJson(response, statusCode, payload, extraHeaders = {}) { response.writeHead(statusCode, commonHeaders({ 'content-type': 'application/json; charset=utf-8', ...extraHeaders })); response.end(JSON.stringify(payload)); }
 function writeViewerHtml(response, html, nonce) { response.writeHead(200, commonHeaders({ 'content-type': 'text/html; charset=utf-8', ...buildViewerSecurityHeaders(nonce) })); response.end(html); }
-function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
+function matchViewerRoute(pathname) { const match = pathname.match(/^\/viewer\/([0-9a-f-]{36})(?:\/(frame|status|input|stream))?$/i); return match ? { sessionId: match[1], action: match[2] || 'shell' } : null; }
 function matchBrowserSessionRoute(pathname) { const match = pathname.match(/^\/browser\/sessions\/([0-9a-f-]{36})(?:\/(navigate|authorized-state|verify-authentication|finalize-authentication))?$/i); return match ? { sessionId: match[1], action: match[2] || 'status' } : null; }
 function authorizeViewer(request, sessionId) { verifyViewerToken(readBearerToken(request.headers.authorization), { sessionId, secret: viewerSecret }); }
+function consumeViewerBootstrap(token, sessionId) {
+  const payload = verifyViewerToken(token, { sessionId, secret: viewerSecret });
+  const now = Math.floor(Date.now() / 1000);
+  for (const [jti, exp] of consumedViewerBootstraps.entries()) if (Number(exp) <= now) consumedViewerBootstraps.delete(jti);
+  const jti = String(payload?.jti || '');
+  if (!jti || consumedViewerBootstraps.has(jti)) throw Object.assign(new Error('Viewer bootstrap token was already used.'), { statusCode: 401 });
+  consumedViewerBootstraps.set(jti, Number(payload.exp || now));
+  return payload;
+}
+function authorizeViewerUpgrade(request, sessionId) {
+  const protocols = parseViewerProtocols(request.headers['sec-websocket-protocol']);
+  const bootstrap = protocols.find((value) => value.startsWith('trst-bootstrap.'));
+  if (bootstrap) {
+    consumeViewerBootstrap(bootstrap.slice('trst-bootstrap.'.length), sessionId);
+    return { protocol: bootstrap, reconnectTicket: viewerReconnectTickets.issue(sessionId), mode: 'bootstrap' };
+  }
+  const reconnect = protocols.find((value) => value.startsWith('trst-ticket.'));
+  if (reconnect) {
+    const rotated = viewerReconnectTickets.rotate(sessionId, reconnect.slice('trst-ticket.'.length));
+    if (!rotated) throw Object.assign(new Error('Viewer reconnect ticket is invalid.'), { statusCode: 401 });
+    return { protocol: reconnect, reconnectTicket: rotated, mode: 'reconnect' };
+  }
+  throw Object.assign(new Error('Viewer WebSocket authorization is required.'), { statusCode: 401 });
+}
 function authorizeWorkerControl(request) {
   const supplied = String(request.headers['x-toprated-worker-secret'] || '');
   const left = Buffer.from(supplied, 'utf8');
@@ -135,6 +163,7 @@ async function interactiveStatusOrNull(sessionId) {
 
 async function stopSession(sessionId) {
   sessionAuthenticationPolicies.delete(sessionId);
+  viewerReconnectTickets.revoke(sessionId);
   if (controller.has(sessionId)) return controller.stop(sessionId);
   if (finalizingInteractiveSessions.has(sessionId)) {
     throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
@@ -159,8 +188,8 @@ async function sessionFrame(sessionId) {
   }
   return interactiveAuth.frame(sessionId);
 }
-async function sessionInput(sessionId, body) {
-  if (controller.has(sessionId)) return controller.sendViewerInput(sessionId, body);
+async function sessionInput(sessionId, body, includeMetadata = true) {
+  if (controller.has(sessionId)) return controller.sendViewerInput(sessionId, body, { includeMetadata });
   if (finalizingInteractiveSessions.has(sessionId)) {
     throw Object.assign(new Error('Administrator authentication is being validated.'), { statusCode: 409 });
   }
@@ -337,7 +366,97 @@ const server = http.createServer(async (request, response) => {
     writeJson(response, statusCode, { status: 'error', ...(safeCode ? { code: safeCode } : {}), message: statusCode >= 500 ? 'Browser worker operation failed.' : String(error.message || 'Request failed.'), ...(process.env.NODE_ENV === 'production' || statusCode < 500 ? {} : { detail: String(error.message || error) }) }, extraHeaders);
   }
 });
-server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' })));
+
+
+server.on('upgrade', async (request, socket) => {
+  let peer = null;
+  let stopStream = null;
+  let heartbeat = null;
+  try {
+    const requestUrl = new URL(request.url || '/', 'http://browser-worker.local');
+    const route = matchViewerRoute(requestUrl.pathname);
+    if (!route || route.action !== 'stream') throw Object.assign(new Error('Viewer WebSocket route was not found.'), { statusCode: 404 });
+    assertNoQuery(requestUrl);
+    const clientAddress = String(request.socket.remoteAddress || 'unknown');
+    enforceRateLimit(viewerClientRateLimiter, clientAddress);
+    enforceRateLimit(viewerSessionRateLimiter, `${clientAddress}:${route.sessionId}`);
+    await sessionStatus(route.sessionId);
+    await assertViewerToolAuthentication(route.sessionId);
+    const authorization = authorizeViewerUpgrade(request, route.sessionId);
+    acceptWebSocketUpgrade(request, socket, authorization.protocol);
+    peer = createWebSocketPeer(socket, { maxMessageBytes: 16 * 1024 });
+    let lastPong = Date.now();
+    let inputQueue = Promise.resolve();
+    peer.on('pong', () => { lastPong = Date.now(); });
+    const initialStatus = await sessionStatus(route.sessionId);
+    peer.sendJson({ type: 'ready', sessionId: route.sessionId, reconnectTicket: authorization.reconnectTicket, viewport: initialStatus.viewport, displayMode: initialStatus.displayMode });
+
+    peer.on('message', (opcode, payload) => {
+      if (opcode !== 0x1 || peer.closed) return;
+      inputQueue = inputQueue.then(async () => {
+        const message = JSON.parse(payload.toString('utf8'));
+        if (message?.type === 'input') {
+          await sessionInput(route.sessionId, message.input, false);
+          return;
+        }
+        if (message?.type === 'viewport' && controller.has(route.sessionId)) {
+          const viewport = await controller.resizeViewerViewport(route.sessionId, message.width, message.height);
+          peer.sendJson({ type: 'viewport', viewport });
+        }
+      }).catch((error) => {
+        if (!peer.closed) peer.sendJson({ type: 'error', code: String(error?.code || 'VIEWER_INPUT_FAILED'), message: Number(error?.statusCode || 500) >= 500 ? 'Viewer operation failed.' : String(error?.message || 'Viewer operation failed.') });
+        if ([401, 403, 410, 423].includes(Number(error?.statusCode || 0))) peer.close(1008, 'Viewer authorization ended.');
+      });
+    });
+
+    if (controller.has(route.sessionId)) {
+      stopStream = await controller.openViewerStream(route.sessionId, (frame) => { if (!peer.closed) peer.sendBinary(frame); });
+    } else {
+      let active = true;
+      stopStream = async () => { active = false; };
+      void (async () => {
+        while (active && !peer.closed) {
+          try {
+            await assertViewerToolAuthentication(route.sessionId);
+            const frame = await sessionFrame(route.sessionId);
+            if (!peer.closed) peer.sendBinary(frame);
+          } catch (error) {
+            if ([404, 410].includes(Number(error?.statusCode || 0))) viewerReconnectTickets.revoke(route.sessionId);
+            if (!peer.closed) peer.sendJson({ type: 'error', code: String(error?.code || 'VIEWER_STREAM_FAILED'), message: Number(error?.statusCode || 500) >= 500 ? 'Viewer stream failed.' : String(error?.message || 'Viewer stream failed.') });
+            if ([401, 403, 410, 423].includes(Number(error?.statusCode || 0))) { peer.close(1008, 'Viewer session ended.'); break; }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 75));
+        }
+      })();
+    }
+
+    heartbeat = setInterval(() => {
+      if (peer.closed) return;
+      if (Date.now() - lastPong > 45000) { peer.close(1001, 'Viewer heartbeat timed out.'); return; }
+      void assertViewerToolAuthentication(route.sessionId).then(() => peer.ping()).catch((error) => {
+        if (!peer.closed) peer.sendJson({ type: 'error', code: String(error?.code || 'VIEWER_AUTH_CHECK_FAILED'), message: Number(error?.statusCode || 500) >= 500 ? 'Viewer authentication check failed.' : String(error?.message || 'Viewer authentication check failed.') });
+        peer.close(1008, 'Viewer authorization ended.');
+      });
+    }, 15000);
+    heartbeat.unref?.();
+    peer.on('close', () => { if (heartbeat) clearInterval(heartbeat); if (stopStream) void stopStream(); });
+  } catch (error) {
+    if (heartbeat) clearInterval(heartbeat);
+    if (stopStream) { try { await stopStream(); } catch {} }
+    if (peer && !peer.closed) peer.close(1008, 'Viewer connection rejected.');
+    else {
+      const status = Number(error?.statusCode || 500);
+      const reason = status === 404 ? 'Not Found' : status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : status === 429 ? 'Too Many Requests' : 'Bad Request';
+      try { socket.write(`HTTP/1.1 ${status >= 400 && status < 600 ? status : 400} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); } catch {}
+      try { socket.destroy(); } catch {}
+    }
+  }
+});
+
+server.listen(port, '0.0.0.0', () => {
+  console.log(JSON.stringify({ event: 'worker_started', port, phase: RUNTIME_PHASE, control: 'cdp', viewer: 'restricted', lifecycleOwner: 'laravel', viewerGrantIssuer: 'laravel', crashWatchdog: 'process-exit-cleanup', browserState: 'ephemeral-private-control-plane' }));
+  controller.scheduleWarmRefill();
+});
 let shuttingDown = false;
 async function shutdown(signal) { if (shuttingDown) return; shuttingDown = true; clearInterval(policyPruneTimer); console.log(JSON.stringify({ event: 'worker_stopping', signal })); const forceTimer = setTimeout(() => process.exit(1), 12000); forceTimer.unref(); try { await controller.stopAll(); sessionAuthenticationPolicies.clear(); } catch (error) { console.error(JSON.stringify({ event: 'browser_cleanup_failed', message: String(error.message || error) })); } server.close(() => process.exit(0)); }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
